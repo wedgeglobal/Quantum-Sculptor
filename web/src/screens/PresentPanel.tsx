@@ -23,12 +23,23 @@ import { useNow } from '../useNow'
 
 /** The library's categories as tabs: the scene's own guides and text first, then the Quicksilver sheets. */
 // built on first use: the registry imports Properties' cards, which import this file
-const cats = () => [{ id: 'scene', short: 'Scene' }, ...CATEGORIES.map((c) => ({ id: c.id, short: c.id === 'glyphs' ? 'Glyphs' : c.id === 'data' ? 'Data' : c.title }))]
+// Controls (dials, number controls, the view camera as an object) stays in the registry but off the library
+const cats = () => [{ id: 'scene', short: 'Scene' }, ...CATEGORIES.filter((c) => c.id !== 'controls').map((c) => ({ id: c.id, short: c.id === 'glyphs' ? 'Glyphs' : c.id === 'data' ? 'Data' : c.title }))]
 
 /** A group within a page: a small heading and its controls. */
 function Group({ label, children }: { label?: string; children: ReactNode }) {
   if (label) return <Panel id={`cmp-${label.toLowerCase().replace(/\W+/g, '-')}`} title={label} sub>{children}</Panel>
   return <section className="pd-sec">{children}</section>
+}
+
+/** Compose's second level: a small capitalised heading over its rows. Tabs are the first level, rows the third. */
+function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="cmp-sec">
+      <header className="cmp-sec__h"><span className="cmp-sec__t">{title}</span>{aside != null && <span className="cmp-sec__a">{aside}</span>}</header>
+      <div className="cmp-sec__b">{children}</div>
+    </section>
+  )
 }
 
 /** A labelled group of pills, one of which is on. */
@@ -138,36 +149,36 @@ function Compositions() {
 function TidyRow() {
   const p = usePresent()
   return (
-    <div className="pd-tidy">
-      <span className="pd-tidy__k">Lay out again for {frameOf(p.frame).t.toLowerCase()}</span>
+    <Section title="Layout" aside={frameOf(p.frame).t}>
       <Buttons>
-        {TIDY_LEVELS.map((l) => <Button key={l.id} onClick={() => p.tidy(l.id)} tip={l.t} desc={l.d}>{l.t}</Button>)}
+        {TIDY_LEVELS.map((l) => <Button key={l.id} onClick={() => p.tidy(l.id)} tip={`Lay out again: ${l.t}`} desc={l.d}>{l.t}</Button>)}
       </Buttons>
-    </div>
+    </Section>
   )
 }
 
-/** The preset: the Default, the whole composition (pieces, motion and view) as it was designed. */
-function Presets() {
+/** Compose's head, over the tabs: which composition is on the view, how many pieces, and the actions on it. */
+function ComposeHead() {
   const p = usePresent()
-  const on = p.current === DEFAULT_ID || (!p.current && sameComposition(p.compose, DEFAULT_COMPOSITION.compose))
+  const def = p.current === DEFAULT_ID || (!p.current && sameComposition(p.compose, DEFAULT_COMPOSITION.compose))
+  const cur = p.saved.find((x) => x.id === p.current)
+  const on = countOn(p.compose, CATEGORIES.flatMap((c) => c.fams)) + p.texts.length
   return (
-    <>
-      <div className="pd-plist" role="radiogroup" aria-label="Presets">
-        <button role="radio" aria-checked={on} className={'pd-prow' + (on ? ' pd-prow--on' : '')} onClick={() => p.applyDefault()}>
-          <span className="pd-prow__t">Default</span>
-          <span className="pd-prow__d">The whole composition as designed: pieces, annotations, animation, shading, lighting and what the view shows.</span>
-        </button>
+    <div className="cmp-head">
+      <div className="cmp-head__now">
+        <span className="cmp-head__k">Composition</span>
+        <span className="cmp-head__t">{def ? 'Default' : cur?.name ?? (on ? 'Custom' : 'Empty')}{!def && cur && isDirty(p) ? ' *' : ''}</span>
+        <span className="cmp-head__n">{on}</span>
       </div>
-      {p.crowded > 0 && <Note warn>{p.crowded === 1 ? 'One piece has' : `${p.crowded} pieces have`} no free room left and overlap others. Remove some, or make them smaller.</Note>}
-      {p.leftOut > 0 && <Note warn>{p.leftOut === 1 ? 'One piece is' : `${p.leftOut} pieces are`} left out of this frame for want of room. A larger frame shows {p.leftOut === 1 ? 'it' : 'them'}.</Note>}
-      <TidyRow />
-      <Buttons>
+      <div className="cmp-head__acts">
+        <Button active={def} onClick={() => p.applyDefault()} tip="Default" desc="The whole composition as designed: pieces, annotations, animation, shading, lighting and what the view shows.">Default</Button>
         <Button active={p.composing} onClick={() => p.setComposing(!p.composing)} tip={p.composing ? 'Done arranging' : 'Arrange on the view'}
           desc="Drag pieces around the view, resize them by the corner, select and remove them. Key: C">{p.composing ? 'Done' : 'Arrange'}</Button>
         <Button onClick={p.clear} tip="Start clean" desc="Take every piece off the view (notes too).">Clear</Button>
-      </Buttons>
-    </>
+      </div>
+      {p.crowded > 0 && <Note warn>{p.crowded === 1 ? 'One piece overlaps others.' : `${p.crowded} pieces overlap others.`}</Note>}
+      {p.leftOut > 0 && <Note warn>{p.leftOut === 1 ? 'One piece does not fit this frame.' : `${p.leftOut} pieces do not fit this frame.`}</Note>}
+    </div>
   )
 }
 
@@ -178,7 +189,7 @@ function OnTheView() {
   const p = usePresent()
   return (
     <>
-      <Panel id="cmp-controls" title="Controls" sub>
+      <Section title="Controls">
         <div className="pd-checks">
           <Checkbox label="Tool shelf" tip="Navigate, probe, annotate, measure and slice, on the left of the view." checked={hud.tools} onChange={(v) => setHud({ tools: v })} />
           <Checkbox label="Navigation" tip="Zoom, pan, orbit and reset, on the right of the view." checked={hud.nav} onChange={(v) => setHud({ nav: v })} />
@@ -189,15 +200,16 @@ function OnTheView() {
           <Checkbox label="Corners" tip="The view's corner marks, when no frame piece is on." checked={hud.frame} onChange={(v) => setHud({ frame: v })} />
           <Checkbox label="Explanations in pieces" tip="Captions and notes inside the pieces. Off, they show data only." checked={p.notes} onChange={p.setNotes} />
         </div>
-      </Panel>
-      <Panel id="cmp-guides" title="Guides" sub>
+      </Section>
+      <Section title="Guides">
         <div className="pd-checks">
           <Checkbox label="Grid box" tip="The dashed n³ outline of the grid." checked={p.guides.box} onChange={(v) => p.setGuides({ box: v })} />
           <Checkbox label="Print grid" tip="Lines on the floor under the model." checked={p.guides.floor} onChange={(v) => p.setGuides({ floor: v })} />
           <Checkbox label="Cutting plane" tip="The slice through the grid." checked={hud.slice} onChange={(v) => setHud({ slice: v })} />
         </div>
         {p.guides.floor && <FloorSize />}
-      </Panel>
+      </Section>
+      <TidyRow />
     </>
   )
 }
@@ -215,7 +227,7 @@ function LibraryPage({ hover }: { hover: (k: string | null, on: boolean) => void
   )
   return (
     <>
-      <SubTabs label="Library categories" value={cat} onChange={p.setLibCat} options={CATS.map((c) => ({ id: c.id, t: c.short, n: counts[c.id] }))} />
+      <Section title="Category"><SubTabs label="Library categories" value={cat} onChange={p.setLibCat} options={CATS.map((c) => ({ id: c.id, t: c.short, n: counts[c.id] }))} /></Section>
       {cat === 'scene' ? (
         <Group>
           <div className="mk">
@@ -249,7 +261,7 @@ function NotesPage() {
   const pins = lv.probe?.pins ?? []
   const rename = (i: number, t: string) => lv.probe?.setPins(pins.map((q, j) => (j === i ? { ...q, hit: { ...q.hit, lines: [t, q.hit.lines[1]] as [string, string] } } : q)))
   return (
-    <Group label="Tool">
+    <Section title="Tool">
       <Segmented<Tool> size="s" value={st.tool} onChange={st.setTool} options={PRESENT_TOOLS.map((t) => ({ value: t.id, label: t.t }))} />
       <div className="pd-row">
         <button className="pd-chip pd-chip--s" disabled={!st.gridData} onClick={() => { lv.autoAnnotate?.() }}
@@ -270,7 +282,7 @@ function NotesPage() {
           ))}
         </ol>
       )}
-    </Group>
+    </Section>
   )
 }
 
@@ -323,6 +335,7 @@ function Animate() {
   const name = { model: 'Model', voxels: 'Voxels', quantum: evolve ? 'Evolve' : 'Quantum', mesh: 'Mesh' }
   return (
     <>
+      <Section title="Play" aside={p.playing ? 'playing' : undefined}>
       <Timeline len={len} />
       <div className="anim-transport">
         <Button kind="primary" active={p.playing} disabled={!len} onClick={() => p.setPlaying(!p.playing)} tip={p.playing ? 'Pause' : 'Play'} desc="Key: P">{p.playing ? 'Pause' : 'Play'}</Button>
@@ -331,7 +344,8 @@ function Animate() {
       </div>
       <Pills<string> label="Speed" value={String(p.speed)} onChange={(v) => p.setSpeed(+v)} options={[0.25, 0.5, 1, 2, 4].map((v) => ({ id: String(v), t: `${v}×` }))} />
       <div className="pd-checks"><Checkbox label="Loop" checked={p.loop} onChange={p.setLoop} /></div>
-      <Panel id="anim-steps" title="Steps" sub aside={r.on ? `${len.toFixed(0)} s` : 'off'}>
+      </Section>
+      <Section title="Steps" aside={r.on ? `${len.toFixed(0)} s` : 'off'}>
         <div className="pd-checks"><Checkbox label="Cycle through the steps" checked={r.on} onChange={(v) => p.setStageReel({ on: v })} /></div>
         <div className="anim-steps" role="group" aria-label="Steps in the loop">
           {STEP_IDS.map((id) => (
@@ -343,8 +357,8 @@ function Animate() {
         {evolve && <Slider label="Turns per second" value={r.tps} min={1} max={30} step={1} format={(v) => `${v} / s · ${(s.evolve.turns / v).toFixed(1)} s`} onChange={(v) => p.setStageReel({ tps: v })} />}
         <Pills<typeof r.blend> label="Between steps" value={r.blend} onChange={(v) => p.setStageReel({ blend: v })}
           options={[{ id: 'off', t: 'Cut' }, { id: 'fade', t: 'Fade' }, { id: 'wipe', t: 'Grow through the plane' }]} />
-      </Panel>
-      <Panel id="anim-plane" title="Cutting plane" sub aside={r.plane === 'off' ? 'off' : `${r.planeSec} s`}>
+      </Section>
+      <Section title="Cutting plane" aside={r.plane === 'off' ? 'off' : `${r.planeSec} s`}>
         <Pills<typeof r.plane> value={r.plane} onChange={(v) => p.setStageReel({ plane: v })}
           options={[{ id: 'off', t: 'Off' }, { id: 'loop', t: 'Whole loop' }, { id: 'mesh', t: 'With the mesh' }]} />
         {r.plane !== 'off' && (
@@ -356,8 +370,8 @@ function Animate() {
             <Slider label="To" value={at(r.to)} min={0} max={n - 1} step={1} ticks={8} format={layer} onChange={(v) => p.setStageReel({ to: v / (n - 1) })} />
           </>
         )}
-      </Panel>
-      <Panel id="anim-camera" title="Camera" sub aside={p.spin ? `${p.spinSpeed}°/s` : undefined}>
+      </Section>
+      <Section title="Camera" aside={p.spin ? `${p.spinSpeed}°/s` : undefined}>
         <div className="pd-checks"><Checkbox label="Turntable" checked={p.spin} onChange={p.setSpin} /></div>
         {p.spin && (
           <>
@@ -379,8 +393,8 @@ function Animate() {
             <Slider label="Seconds per shot" value={p.reelSec} min={2} max={12} step={1} ticks={10} format={(v) => `${v} s`} onChange={(v) => p.setMotion({ reelSec: v })} />
           </>
         )}
-      </Panel>
-      <Panel id="anim-look" title="Look" sub>
+      </Section>
+      <Section title="Look">
         <div className="pd-checks">
           <Checkbox label="Cycle the shading" checked={p.cycles.shading} onChange={(v) => p.setCycles({ shading: v })} />
           <Checkbox label="Cycle the light" checked={p.cycles.light} onChange={(v) => p.setCycles({ light: v })} />
@@ -393,7 +407,7 @@ function Animate() {
             <Slider label="Seconds each" value={p.cycleSec} min={3} max={20} step={1} ticks={9} format={(v) => `${v} s`} onChange={(v) => p.setMotion({ cycleSec: v })} />
           </>
         )}
-      </Panel>
+      </Section>
     </>
   )
 }
@@ -480,21 +494,46 @@ function Exports() {
   )
 }
 
-/** Properties · 05 Compose: what goes on the view. */
+const TABS = [
+  { id: 'view', t: 'View' },
+  { id: 'library', t: 'Library' },
+  { id: 'animate', t: 'Animate' },
+  { id: 'notes', t: 'Notes' },
+  { id: 'saved', t: 'Saved' },
+] as const
+type ComposeTab = (typeof TABS)[number]['id']
+const TAB_KEY = 'qs-compose-tab'
+const savedTab = (): ComposeTab => {
+  try { const v = localStorage.getItem(TAB_KEY); return TABS.some((t) => t.id === v) ? (v as ComposeTab) : 'library' } catch { return 'library' }
+}
+
+/** Properties · 05 Compose: what goes on the view. Three levels: the tabs, a section's heading, its rows. */
 export function ComposeSections() {
   const p = usePresent()
+  const [tab, setTab] = useState<ComposeTab>(savedTab)
+  const pick = (t: ComposeTab) => { setTab(t); try { localStorage.setItem(TAB_KEY, t) } catch { /* per-viewer */ } }
   // hovering a library row: it shows on the view and everything else dims
   const hover = (k: string | null, on: boolean) => { p.setPreview(k && !on ? k : null); p.setHl(k) }
-  const preset = p.current === DEFAULT_ID || sameComposition(p.compose, DEFAULT_COMPOSITION.compose) ? { title: 'Default' } : null
   const on = countOn(p.compose, CATEGORIES.flatMap((c) => c.fams)) + p.texts.length
+  const pins = useLive().probe?.pins.length
+  const n: Partial<Record<ComposeTab, number>> = { library: on, notes: pins, saved: p.saved.length }
   return (
-    <div className={'pd pd--props' + (p.composing ? ' pd--composing' : '')} onPointerLeave={() => { p.setHl(null); p.setPreview(null) }}>
-      <Panel id="cmp-presets" title="Presets" aside={preset ? preset.title : on ? 'custom' : 'none'}><Presets /></Panel>
-      <Panel id="cmp-view" title="On the view"><OnTheView /></Panel>
-      <Panel id="cmp-library" title="Library" aside={on ? `${on} on` : undefined} flush><LibraryPage hover={hover} /></Panel>
-      <Panel id="cmp-animate" title="Animate" aside={p.playing ? 'playing' : undefined}><Animate /></Panel>
-      <Panel id="cmp-annotate" title="Annotate" defaultOpen={false}><NotesPage /></Panel>
-      <Panel id="cmp-saved" title="Saved compositions" aside={p.saved.length || undefined} defaultOpen={false}><Compositions /></Panel>
+    <div className={'pd pd--props cmp' + (p.composing ? ' pd--composing' : '')} onPointerLeave={() => { p.setHl(null); p.setPreview(null) }}>
+      <ComposeHead />
+      <div className="cmp-tabs" role="tablist" aria-label="Compose">
+        {TABS.map((t) => (
+          <button key={t.id} role="tab" aria-selected={tab === t.id} className={'cmp-tab' + (tab === t.id ? ' cmp-tab--on' : '')} onClick={() => pick(t.id)}>
+            {t.t}{n[t.id] ? <span className="cmp-tab__n">{n[t.id]}</span> : null}
+          </button>
+        ))}
+      </div>
+      <div className="cmp-page" role="tabpanel">
+        {tab === 'view' && <OnTheView />}
+        {tab === 'library' && <LibraryPage hover={hover} />}
+        {tab === 'animate' && <Animate />}
+        {tab === 'notes' && <NotesPage />}
+        {tab === 'saved' && <Section title="Compositions" aside={p.saved.length || undefined}><Compositions /></Section>}
+      </div>
     </div>
   )
 }

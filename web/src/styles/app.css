@@ -638,3 +638,43 @@ body.ux-resizing, body.ux-resizing * { user-select: none !important; }
 /* Presets · in motion: a heading of their own, a play mark before each name */
 .pd-prow:disabled { opacity: .45; cursor: default; }
 .kd__link { align-self: flex-start; font: 400 13px/20px var(--qs-mono); letter-spacing: var(--qs-track); color: var(--qs-ink); text-decoration: underline; text-underline-offset: 3px; }
+
+/* a folded column keeps its rail: the page hides, the rail opens it again */
+.ux-side--rail { width: 40px; }
+.ux-side--rail > .ux-col__h { padding: 0; justify-content: center; }
+.ux-side--rail .lab-in__page { display: none; }
+.ux-side--rail .lab-rail { border: 0; }
+
+/* Compose: three levels. 1 the tabs (ink, underlined), 2 a section heading (small capitals, a rule
+   above), 3 the rows. The head over the tabs says what is on the view. */
+.cmp { display: flex; flex-direction: column; min-height: 100%; }
+.cmp-head { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; border-bottom: 1px solid var(--ux-line); }
+.cmp-head__now { display: flex; align-items: baseline; gap: 8px; }
+.cmp-head__k { font: 400 10px/1 var(--qs-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--qs-ink3); }
+.cmp-head__t { font: 500 14px/1 var(--qs-mono); color: var(--qs-ink); }
+.cmp-head__n { margin-left: auto; font: 400 12px/1 var(--qs-mono); color: var(--qs-ink3); font-variant-numeric: tabular-nums; }
+.cmp-tabs { position: sticky; top: 0; z-index: 2; display: flex; background: var(--ux-panel); border-bottom: 1px solid var(--ux-line); }
+.cmp-tab { all: unset; box-sizing: border-box; flex: 1 1 auto; height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 6px;
+  font: 500 12px/1 var(--qs-mono); color: var(--qs-ink3); cursor: pointer; box-shadow: inset 0 -2px 0 transparent; white-space: nowrap; }
+.cmp-tab:hover { color: var(--qs-ink); }
+.cmp-tab:focus-visible { outline: 2px solid var(--qs-ink); outline-offset: -2px; }
+.cmp-tab--on { color: var(--qs-ink); box-shadow: inset 0 -2px 0 var(--qs-ink); }
+.cmp-tab__n { font: 400 10px/1 var(--qs-mono); color: var(--qs-ink3); font-variant-numeric: tabular-nums; }
+.cmp-page { display: flex; flex-direction: column; padding: 0 16px 24px; }
+.cmp-sec { display: flex; flex-direction: column; padding: 18px 0 20px; }
+.cmp-sec + .cmp-sec, .cmp-page > .pd-sec + .cmp-sec, .cmp-sec + .pd-sec { border-top: 1px solid var(--ux-line); }
+.cmp-sec__h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; }
+.cmp-sec__t { font: 500 10px/1 var(--qs-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--qs-ink3); }
+.cmp-sec__a { margin-left: auto; font: 400 11px/1 var(--qs-mono); color: var(--qs-ink3); font-variant-numeric: tabular-nums; }
+.cmp-sec__b { display: flex; flex-direction: column; gap: 12px; }
+.cmp-page > .pd-sec { padding: 4px 0 0; }
+/* library families: the third level, a row each with a rule between */
+.cmp .mk-fam { border-top: 1px solid var(--ux-line); }
+.cmp .mk-fam:first-child { border-top: 0; }
+.cmp .mk-fam__h { min-height: 36px !important; }
+.cmp .mk-fam__t { font: 400 12px/1.2 var(--qs-mono) !important; color: var(--qs-ink); }
+.cmp .mk-row { min-height: 30px !important; padding-left: 16px; }
+.cmp .mk-row__t { color: var(--qs-ink2); }
+.cmp .pd-subtabs { padding: 0; }
+.cmp-head__acts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; }
+.cmp-head__acts .ux-btn + .ux-btn { margin-left: -1px; }

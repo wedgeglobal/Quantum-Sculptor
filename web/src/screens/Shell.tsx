@@ -1,6 +1,6 @@
 // Shell parts: the resizers between panels and the drawer under the view (runtime, Evolve log, Atlas
 // jobs). The Research page lives in Research.tsx.
-import type { ReactNode } from 'react'
+import type { MouseEvent, ReactNode } from 'react'
 import { useShell, type DrawerTab } from '../shell'
 import { useStore } from '../store'
 import { RuntimePanel, AtlasPanel } from './Terminal'
@@ -33,23 +33,32 @@ const DRAWER: { id: DrawerTab; t: string; icon: string; render: () => ReactNode 
   { id: 'atlas', t: 'Atlas jobs', icon: 'atlas', render: () => <AtlasPanel /> },
 ]
 
-/** A side column: a title bar with its controls (swap sides, fold), or a slim strip when folded. */
-export function Column({ side, title, icon, open, width, onWidth, onFold, onSwap, children }: {
+/** A side column: a title bar with its controls (swap sides, fold) over its page and rail. Folded, only
+ *  the rail stays: a rail button opens the column on that group, and the open group's button folds it. */
+export function Column({ side, title, open, width, onWidth, onFold, onSwap, children }: {
   side: 'left' | 'right'; title: string; icon: string; open: boolean; width: number
   onWidth: (v: number) => void; onFold: (open: boolean) => void; onSwap?: () => void; children: ReactNode
 }) {
+  const rail = (e: MouseEvent) => {
+    const b = (e.target as HTMLElement).closest('.lab-rail__b')
+    if (!b || (b as HTMLButtonElement).disabled) return
+    if (!open) onFold(true)
+    else if (b.classList.contains('lab-rail__b--on')) { e.stopPropagation(); onFold(false) }
+  }
   if (!open) {
     return (
-      <aside className={`ux-side ux-side--${side} ux-side--folded`}>
-        <button className="ux-strip" onClick={() => onFold(true)} data-tip={`Show ${title.toLowerCase()}`} data-tip-side={side === 'left' ? 'right' : 'left'}>
-          <Icon name={icon} size={14} />
-          <span className="ux-strip__t">{title}</span>
-        </button>
+      <aside className={`ux-side ux-side--${side} ux-side--rail`} onClickCapture={rail} aria-label={title}>
+        <header className="ux-col__h">
+          <button className="ux-ib" onClick={() => onFold(true)} data-tip={`Show ${title.toLowerCase()}`} data-tip-side={side === 'left' ? 'right' : 'left'} aria-label={`Show ${title}`}>
+            <Icon name={side === 'left' ? 'chevRight' : 'chevLeft'} />
+          </button>
+        </header>
+        <div className="ux-col__b">{children}</div>
       </aside>
     )
   }
   return (
-    <aside className={`ux-side ux-side--${side}`} style={{ width }}>
+    <aside className={`ux-side ux-side--${side}`} style={{ width }} onClickCapture={rail}>
       <header className="ux-col__h">
         <span className="ux-col__t">{title}</span>
         <span className="ux-col__tools">
