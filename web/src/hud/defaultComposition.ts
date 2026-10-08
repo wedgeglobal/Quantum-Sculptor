@@ -7,6 +7,6 @@ import data from './defaultComposition.json'
 
 export const DEFAULT_ID = 'default'
 export const DEFAULT_COMPOSITION = data as Saved
-/** The view's own controls for a Default saved before compositions kept them: the tool shelf, the camera
- *  readout and the cutting plane. */
-export const DEFAULT_HUD = { tools: true, axes: false, nav: false, camera: true, caption: false, legend: false, frame: false, slice: true }
+/** The view's own controls for a Default saved before compositions kept them: the tool shelf
+ *  only; the camera readout and the cutting plane stay off, so the view reads as the object and its marks. */
+export const DEFAULT_HUD = { tools: true, axes: false, nav: false, camera: false, caption: false, legend: false, frame: false, slice: false }
