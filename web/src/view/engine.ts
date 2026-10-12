@@ -82,6 +82,13 @@ export interface Pick {
   point: THREE.Vector3 // grid coords
 }
 
+
+/** The rhythm's settings (Engine.setRhythm). */
+export interface RhythmSet { angle: number; beat: number; zoom: number; tilt: number; roll: number; random: number; ease: 'smooth' | 'snappy' | 'float' }
+
+/** The nearest and furthest a layout frames the camera from its target (grid-box units). */
+const FRAME_MIN = 0.9, FRAME_MAX = 12
+
 export class Engine {
   renderer: THREE.WebGLRenderer
   scene = new THREE.Scene()
@@ -94,9 +101,9 @@ export class Engine {
   n = 32
   dirty = true
   private box = new THREE.BoxGeometry(0.9, 0.9, 0.9)
-  private meshMat = new THREE.MeshStandardMaterial({ color: SURFACE, roughness: 0.85, metalness: 0, flatShading: true, side: THREE.DoubleSide })
+  private meshMat = new THREE.MeshStandardMaterial({ color: SURFACE, roughness: 0.85, metalness: 0, flatShading: false, side: THREE.DoubleSide })
   /** A mesh painted per vertex (paintMesh): the value shading of the model and the result. */
-  private meshMatV = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0, flatShading: true, side: THREE.DoubleSide, vertexColors: true })
+  private meshMatV = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0, flatShading: false, side: THREE.DoubleSide, vertexColors: true })
   private voxMats: Record<string, THREE.MeshLambertMaterial> = {
     voxels: new THREE.MeshLambertMaterial({ color: 0xffffff }),
     processed: new THREE.MeshLambertMaterial({ color: 0xffffff }),
@@ -136,6 +143,17 @@ export class Engine {
   /** Scratch n³ map cell → union slot (−1 = none), reset after each use. */
   private slot: Int32Array | null = null
   onChange?: () => void
+  /** Frames a second at most (see the loop); the HUD redraws at the same rate (LiveLayer). */
+  maxFps = 60
+  private lastFrame = 0
+  private lastUpdate = performance.now()
+  setMaxFps(fps: number) { this.maxFps = Math.max(10, Math.min(120, fps)); this.dirty = true }
+
+  /** Hand camera changes to `fn` (one listener); returns how to stop. */
+  listen(fn: () => void) {
+    this.onChange = fn
+    return () => { if (this.onChange === fn) this.onChange = undefined }
+  }
 
   private host: HTMLElement
   private lights!: { hemi: THREE.HemisphereLight; key: THREE.DirectionalLight; rim: THREE.DirectionalLight }
@@ -176,6 +194,7 @@ export class Engine {
     this.plane.add(this.planeEdge)
     this.plane.visible = false
     this.root.add(this.plane)
+    this.root.add(this.slicers)
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
@@ -187,6 +206,10 @@ export class Engine {
     new ResizeObserver(() => this.resize()).observe(host)
     const loop = () => {
       this.raf = requestAnimationFrame(loop)
+      // at most `maxFps` frames a second: the steps below and the draw run only on a frame that is due,
+      // so an animation at 30 costs half of one at 60
+      const now = performance.now()
+      if (now - this.lastFrame < 1000 / this.maxFps - 2) return
       if (this.tween) {
         const k = Math.min(1, (performance.now() - this.tween.t0) / 480)
         const e = 1 - (1 - k) ** 3
@@ -200,9 +223,15 @@ export class Engine {
         this.dirty = true
         this.onChange?.()
       }
-      this.stepMorphs(performance.now())
-      this.controls.update()
+      this.stepMorphs(now)
+      this.stepFade(now)
+      this.liftRhythm()
+      // the time since the last update, so the turntable keeps its speed at any frame rate
+      this.controls.update(Math.min(0.1, (now - this.lastUpdate) / 1000))
+      this.lastUpdate = now
+      this.layRhythm(now)
       if (this.dirty) {
+        this.lastFrame = now
         this.renderer.render(this.scene, this.camera)
         this.dirty = false
       }
@@ -222,7 +251,9 @@ export class Engine {
   /** Swing the camera to an azimuth / elevation (degrees). az 0 = front (camera on −y).
    *  Calls in quick succession (a drag on a HUD mark) move the camera directly, keeping its distance. */
   orbitTo(azDeg: number, elDeg: number, distScale = 1) {
-    const now = performance.now(), dragging = now - this.lastOrbit < 120
+    // a drag keeps the distance; a camera not yet out at a working distance (the very first frames,
+    // when two calls can land together) swings out instead
+    const now = performance.now(), dragging = now - this.lastOrbit < 120 && this.camera.position.distanceTo(this.controls.target) >= FRAME_MIN
     this.lastOrbit = now
     if (dragging) {
       const az = THREE.MathUtils.degToRad(azDeg), el = THREE.MathUtils.degToRad(Math.max(-89.5, Math.min(elDeg, 89.5)))
@@ -272,21 +303,46 @@ export class Engine {
 
   /** Dolly and pan (keeping the angle) until what is shown fills `rect` (host px) without spilling:
    *  how Present frames the object in the room its HUD leaves. */
-  frameInto(rect: { l: number; r: number; t: number; b: number }) {
+  /** Orbit round the middle of what is shown: the target moves to the 3D centre of the active layer
+   *  (the camera keeps its angle and distance), so turning never swings the object off the centre. */
+  centre() {
+    const layer = this.layers[this.active] ?? this.layers.model
+    if (!layer) return
+    this.scene.updateMatrixWorld(true)
+    const box = new THREE.Box3().setFromObject(layer)
+    if (box.isEmpty()) return
+    const c = box.getCenter(new THREE.Vector3())
+    const off = this.camera.position.clone().sub(this.controls.target)
+    this.controls.target.copy(c)
+    this.camera.position.copy(c).add(off)
+    this.camera.lookAt(c)
+    this.camera.updateMatrixWorld()
+    this.controls.update()
+    this.dirty = true
+    this.onChange?.()
+  }
+
+  frameInto(rect: { l: number; r: number; t: number; b: number }, { pan = true }: { pan?: boolean } = {}) {
     // the view may have just taken a new frame's shape: project with the camera's current aspect
     if (this.host.clientHeight && Math.abs(this.camera.aspect - this.host.clientWidth / this.host.clientHeight) > 1e-3) this.resize()
     const t = this.controls.target, cam = this.camera
     const H = this.host.clientHeight
+    // a camera inside the object (or nearly) cannot measure it: back to the home distance first
+    if (cam.position.distanceTo(t) < FRAME_MIN) { cam.position.copy(t).add(cam.position.clone().sub(t).setLength(2.4)); cam.lookAt(t); cam.updateMatrixWorld() }
     for (let i = 0; i < 4; i++) {
       const cur = this.bounds2D()
-      if (!cur || cur.r - cur.l < 1 || cur.b - cur.t < 1) return
+      // nothing measurable on screen (a layer still empty): leave the distance as it is
+      if (!cur || cur.r - cur.l < 4 || cur.b - cur.t < 4) break
       const k = Math.min((rect.r - rect.l) / (cur.r - cur.l), (rect.b - rect.t) / (cur.b - cur.t))
       const off = cam.position.clone().sub(t).multiplyScalar(1 / Math.max(0.2, Math.min(5, k)))
+      // never closer than FRAME_MIN, never further than FRAME_MAX
+      off.setLength(Math.max(FRAME_MIN, Math.min(FRAME_MAX, off.length())))
       cam.position.copy(t).add(off)
       cam.lookAt(t)
       cam.updateMatrixWorld()
+      if (!pan) continue
       const now = this.bounds2D()
-      if (!now) return
+      if (!now) break
       const dx = (rect.l + rect.r) / 2 - (now.l + now.r) / 2, dy = (rect.t + rect.b) / 2 - (now.t + now.b) / 2
       const wpp = (2 * off.length() * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2)) / H
       const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0)
@@ -321,6 +377,85 @@ export class Engine {
     this.dirty = true
   }
 
+  /** Rhythm: beat after beat the view swings to a new pose and holds, like a hand-held gimbal. Each beat
+   *  (every `beat` seconds) it turns about `angle` degrees round the object (left or right at random by
+   *  `random`), tilts up or down by up to `tilt` degrees, comes in or out by up to `zoom` and rolls by
+   *  up to `roll` degrees; it pulls back a little while it moves and eases into the hold (`ease`),
+   *  where it keeps breathing slightly. It is laid over your own camera: you still orbit, zoom and pan
+   *  (and the turntable still turns) underneath it. The randomness is seeded by the beat. */
+  private rhythm: (RhythmSet & { t0: number }) | null = null
+  /** The offset the rhythm last laid on the camera (degrees round, degrees up, distance factor). */
+  private applied: { az: number; el: number; k: number } | null = null
+  setRhythm(r: RhythmSet | null) {
+    if (!r) {
+      // off: back to your own camera
+      if (this.rhythm) { this.liftRhythm(); this.camera.lookAt(this.controls.target); this.dirty = true; this.onChange?.() }
+      this.rhythm = null
+      return
+    }
+    this.rhythm = { ...r, t0: this.rhythm?.t0 ?? performance.now() }
+  }
+  /** The camera round its target: degrees round (az 0 = front, −y), degrees up, distance. */
+  private sph() {
+    const v = this.camera.position.clone().sub(this.controls.target), d = v.length() || 1e-6
+    return { az: THREE.MathUtils.radToDeg(Math.atan2(v.x, -v.y)), el: THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(v.z / d, -1, 1))), d }
+  }
+  private aim(az: number, el: number, d: number) {
+    const A = THREE.MathUtils.degToRad(az), E = THREE.MathUtils.degToRad(el)
+    this.camera.position.copy(this.controls.target).add(new THREE.Vector3(Math.cos(E) * Math.sin(A), -Math.cos(E) * Math.cos(A), Math.sin(E)).multiplyScalar(d))
+    this.camera.lookAt(this.controls.target)
+  }
+  /** The offset at the end of beat k: degrees round and up, a distance factor, a roll (k = 0: none). */
+  private pose(k: number) {
+    const r = this.rhythm!
+    const rnd = (i: number, j: number) => { const x = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return x - Math.floor(x) }   // 0..1, seeded
+    let az = 0
+    for (let i = 1; i <= k; i++) {
+      const flip = r.random > 0 && rnd(i, 1) < r.random * 0.5 ? -1 : 1
+      az += r.angle * flip * (1 - r.random * 0.4 + r.random * 0.8 * rnd(i, 2))
+    }
+    if (k === 0) return { az, el: 0, k: 1, roll: 0 }
+    const s = (j: number) => rnd(k, j) * 2 - 1
+    return { az, el: r.tilt * s(3), k: 1 + r.zoom * s(4), roll: r.roll * s(5) }
+  }
+  /** The rhythm's offset now. */
+  private offset(now: number) {
+    const r = this.rhythm!
+    const s = (now - r.t0) / 1000 / Math.max(0.5, r.beat), k = Math.floor(s), u = s - k
+    const a = this.pose(k), b = this.pose(k + 1)
+    // the move takes the first 70% of the beat, then it holds
+    const m = Math.min(1, u / 0.7)
+    const e = r.ease === 'snappy' ? 1 - Math.pow(1 - m, 4)
+      : r.ease === 'float' ? (m < 1 ? 1 + 2.2 * Math.pow(m - 1, 3) + 1.2 * Math.pow(m - 1, 2) : 1)   // a slight overshoot
+      : m < 0.5 ? 4 * m * m * m : 1 - Math.pow(-2 * m + 2, 3) / 2
+    const lerp = (x: number, y: number) => x + (y - x) * e
+    // a little pull back while it moves, and a slow breath while it holds
+    const breath = Math.sin((now - r.t0) / 1000 * 1.3)
+    return { az: lerp(a.az, b.az), el: lerp(a.el, b.el) + 0.8 * breath, k: lerp(a.k, b.k) * (1 + r.zoom * 0.5 * Math.sin(Math.PI * m)) * (1 + 0.01 * breath), roll: lerp(a.roll, b.roll) }
+  }
+  /** Before the controls update: take the rhythm's offset off, so your input (a drag, a scroll, the
+   *  turntable, a shot) moves your own camera. Undone by its inverse, whoever moved the camera since. */
+  private liftRhythm() {
+    const o = this.applied
+    if (!o) return
+    const c = this.sph()
+    this.aim(c.az - o.az, THREE.MathUtils.clamp(c.el - o.el, -89, 89), c.d / o.k)
+    this.applied = null
+  }
+  /** After: draw the rhythm over your camera. */
+  private layRhythm(now: number) {
+    if (!this.rhythm) return
+    const c = this.sph(), o = this.offset(now)
+    const el = THREE.MathUtils.clamp(c.el + o.el, -85, 85), d = Math.max(FRAME_MIN * 0.5, c.d * o.k)
+    this.aim(c.az + o.az, el, d)
+    if (o.roll) this.camera.rotateZ(THREE.MathUtils.degToRad(o.roll))
+    this.camera.updateMatrixWorld()
+    // what was actually laid on, so lifting it gives back exactly your camera
+    this.applied = { az: o.az, el: el - c.el, k: d / c.d }
+    this.dirty = true
+    this.onChange?.()
+  }
+
   /** The renderer's device pixel ratio (render(scale) multiplies it). */
   pixelRatio() { return this.renderer.getPixelRatio() }
 
@@ -328,7 +463,7 @@ export class Engine {
   exportable(): THREE.Object3D {
     const out = new THREE.Group()
     for (const c of this.root.children) {
-      if (c === this.frame || c === this.plane || c === this.scanner || !c.visible) continue
+      if (c === this.frame || c === this.plane || c === this.slicers || c === this.scanner || !c.visible) continue
       out.add(c.clone())
     }
     out.applyMatrix4(this.root.matrixWorld)
@@ -341,13 +476,15 @@ export class Engine {
     const w = this.host.clientWidth, h = this.host.clientHeight
     this.renderer.setPixelRatio(pr * scale)
     this.renderer.setSize(w, h, false)
-    const frame = this.frame.visible, plane = this.plane.visible
+    const frame = this.frame.visible, plane = this.plane.visible, slicers = this.slicers.visible
+    this.slicers.visible = false
     this.frame.visible = false
     this.plane.visible = false
     this.renderer.render(this.scene, this.camera)
     const blob = await new Promise<Blob | null>((res) => this.renderer.domElement.toBlob(res, 'image/png'))
     this.frame.visible = frame
     this.plane.visible = plane
+    this.slicers.visible = slicers
     this.renderer.setPixelRatio(pr)
     this.renderer.setSize(w, h, false)
     this.dirty = true
@@ -368,7 +505,8 @@ export class Engine {
     const cam = this.camera.clone()
     cam.aspect = w / h
     cam.updateProjectionMatrix()
-    const keep = { view: this.view, active: this.active, ghosts: this.ghosts, frame: this.frame.visible, plane: this.plane.visible, scanner: this.scanner.visible }
+    const keep = { view: this.view, active: this.active, ghosts: this.ghosts, frame: this.frame.visible, plane: this.plane.visible, slicers: this.slicers.visible, scanner: this.scanner.visible }
+    this.slicers.visible = false
     const px = new Uint8Array(W * H * 4)
     const canvas = document.createElement('canvas')
     canvas.width = W
@@ -400,6 +538,7 @@ export class Engine {
     this.apply()
     this.frame.visible = keep.frame
     this.plane.visible = keep.plane
+    this.slicers.visible = keep.slicers
     this.scanner.visible = keep.scanner
     this.dirty = true
     return out
@@ -422,6 +561,12 @@ export class Engine {
   home() {
     this.controls.target.set(0, 0, 0.42)
     this.orbitTo(35, 22)
+  }
+
+  /** Back to the starting angle, orbiting round the object's own centre. */
+  homeCentred() {
+    this.orbitTo(35, 22)
+    this.centre()
   }
 
   /** Camera distance to the target in grid-box units, and the vertical field of view. */
@@ -603,6 +748,9 @@ export class Engine {
     const g = new THREE.BufferGeometry()
     g.setAttribute('position', new THREE.BufferAttribute(data.vertices, 3))
     g.setIndex(new THREE.BufferAttribute(data.faces, 1))
+    // normals averaged over the faces round each vertex: the surface shades smooth (setFacets turns
+    // the faces back on)
+    g.computeVertexNormals()
     const mesh = new THREE.Mesh(g, this.meshMat)
     if (transform) {
       mesh.matrixAutoUpdate = false
@@ -892,9 +1040,49 @@ export class Engine {
   }
 
   show(name: ViewName) {
+    const from = this.active, to: LayerName = name === 'scan' ? 'processed' : name
     this.view = name
-    this.active = name === 'scan' ? 'processed' : name
+    this.active = to
+    // one step to the next: the geometry morphs, the old layer dissolving as the new one comes up
+    if (this.morphMs > 0 && from !== to && this.layers[from] && this.layers[to] && !this.split && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      this.xfade = { from, to, t0: performance.now() }
+    }
     this.apply()
+  }
+
+  /** How long one layer takes to morph into the next when the view changes step (ms; 0 cuts). */
+  private morphMs = 750
+  setMorphMs(ms: number) { this.morphMs = Math.max(0, ms) }
+  /** A switch between layers under way (see show). */
+  private xfade: { from: LayerName; to: LayerName; t0: number } | null = null
+  private xmats = new Map<string, THREE.Material>()
+  /** A see-through copy of a layer's material for the crossfade (shader materials keep their own). */
+  private fadeMat(k: LayerName, base: THREE.Material): THREE.Material | null {
+    if (base instanceof THREE.ShaderMaterial) return null
+    const key = `${k}|${base.uuid}`
+    let m = this.xmats.get(key)
+    if (!m) { m = base.clone(); m.transparent = true; this.xmats.set(key, m) }
+    return m
+  }
+  private stepFade(now: number) {
+    const x = this.xfade
+    if (!x) return
+    const k = Math.min(1, (now - x.t0) / Math.max(1, this.morphMs)), e = k * k * (3 - 2 * k)
+    const out = this.layers[x.from] as THREE.Mesh | undefined, inn = this.layers[x.to] as THREE.Mesh | undefined
+    if (k >= 1 || !out || !inn) {
+      this.xfade = null
+      if (out) out.renderOrder = 0
+      if (inn) inn.renderOrder = 0
+      this.apply()
+      return
+    }
+    const mo = this.fadeMat(x.from, this.materialFor(x.from)), mi = this.fadeMat(x.to, this.materialFor(x.to))
+    out.visible = true
+    if (mo) { out.material = mo; mo.opacity = 1 - e; mo.depthWrite = false }
+    if (mi) { inn.material = mi; mi.opacity = e; mi.depthWrite = true }
+    out.renderOrder = 1
+    inn.renderOrder = 0
+    this.dirty = true
   }
 
   /** Scan plane at the bottom face of layer z (may be fractional). Only the clipping planes move. */
@@ -931,6 +1119,12 @@ export class Engine {
     }
     if (this.outline) this.outline.visible = this.showBounds
     if (this.floor) this.floor.visible = this.showFloor
+    this.dirty = true
+  }
+
+  /** Shade meshes by their faces (each triangle flat) or smooth across them. */
+  setFacets(on: boolean) {
+    for (const m of [this.meshMat, this.meshMatV]) { if (m.flatShading !== on) { m.flatShading = on; m.needsUpdate = true } }
     this.dirty = true
   }
 
@@ -1010,6 +1204,56 @@ export class Engine {
     mat.opacity = 0.94
     mat.needsUpdate = true
     this.dirty = true
+  }
+
+  /** Slicers besides the main plane: one more plane per axis, each with its own section. */
+  private extra: Partial<Record<Axis, THREE.Mesh>> = {}
+  private slicers = new THREE.Group()
+  setSlicers(list: { axis: Axis; index: number; rgba: Uint8ClampedArray | null; n: number; smooth?: boolean }[]) {
+    const want = new Set(list.map((x) => x.axis))
+    for (const [ax, m] of Object.entries(this.extra) as [Axis, THREE.Mesh][]) {
+      if (want.has(ax)) continue
+      this.slicers.remove(m)
+      ;(m.material as THREE.MeshBasicMaterial).map?.dispose()
+      ;(m.material as THREE.Material).dispose()
+      delete this.extra[ax]
+    }
+    for (const sl of list) {
+      let m = this.extra[sl.axis]
+      if (!m) {
+        m = new THREE.Mesh(this.plane.geometry, (this.plane.material as THREE.Material).clone())
+        m.add(new THREE.LineSegments(this.planeEdge.geometry, this.planeEdge.material))
+        this.slicers.add(m)
+        this.extra[sl.axis] = m
+      }
+      const mat = m.material as THREE.MeshBasicMaterial
+      mat.map?.dispose()
+      if (sl.rgba) {
+        const n = sl.n, data = new Uint8Array(n * n * 4)
+        for (let t = 0; t < n; t++) for (let q = 0; q < n; q++) {
+          const [u, v] = sl.axis === 'x' ? [t, n - 1 - q] : [q, t]
+          const i = (v * n + u) * 4, o = (t * n + q) * 4
+          data[o] = sl.rgba[i]; data[o + 1] = sl.rgba[i + 1]; data[o + 2] = sl.rgba[i + 2]; data[o + 3] = sl.rgba[i + 3] || 16
+        }
+        const tex = new THREE.DataTexture(data, n, n, THREE.RGBAFormat)
+        tex.magFilter = tex.minFilter = sl.smooth ? THREE.LinearFilter : THREE.NearestFilter
+        tex.colorSpace = THREE.SRGBColorSpace
+        tex.needsUpdate = true
+        mat.map = tex; mat.color.set(0xffffff); mat.opacity = 0.94
+      } else { mat.map = null; mat.color.copy(this.planeInk); mat.opacity = 0.06 }
+      mat.needsUpdate = true
+      this.place(m, sl.axis, sl.index)
+      m.visible = this.view !== 'scan'
+    }
+    this.dirty = true
+  }
+  private place(p: THREE.Object3D, axis: Axis, index: number) {
+    const n = this.n, c = (n - 1) / 2
+    p.scale.set(n, n, 1)
+    p.rotation.set(0, 0, 0)
+    if (axis === 'z') p.position.set(c, c, index)
+    else if (axis === 'x') { p.rotation.set(0, Math.PI / 2, 0); p.position.set(index, c, c) }
+    else { p.rotation.set(Math.PI / 2, 0, 0); p.position.set(c, index, c) }
   }
 
   setSlice(s: { axis: Axis; index: number } | null) {

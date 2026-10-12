@@ -11,7 +11,8 @@ const clockOf = (ms: number) => {
 
 function subscribe(c: Clock, cb: () => void) {
   c.subs.add(cb)
-  c.iv ??= setInterval(() => { c.now = Date.now(); c.subs.forEach((f) => f()) }, c.ms)
+  // a hidden page (another tab, a folded pane) does not tick: nothing would see it, and every tick redraws
+  c.iv ??= setInterval(() => { if (document.hidden) return; c.now = Date.now(); c.subs.forEach((f) => f()) }, c.ms)
   return () => {
     c.subs.delete(cb)
     if (!c.subs.size && c.iv) { clearInterval(c.iv); c.iv = null }

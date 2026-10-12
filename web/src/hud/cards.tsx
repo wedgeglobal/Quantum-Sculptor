@@ -13,7 +13,7 @@ import { useHeld } from './motion'
 import './cards.css'
 
 export function SliceCard({ layers }: { layers?: boolean }) {
-  const { gridData, slice: live, grid } = useStore()
+  const { gridData, slice: live } = useStore()
   const slice = useHeld(live)
   const sec = useSection()
   const g = sec.grid
@@ -25,8 +25,7 @@ export function SliceCard({ layers }: { layers?: boolean }) {
       <div className="hud-card__head"><span className="hud-card__t">Slice</span><span className="hud-card__n">{slice.axis} {slice.index} / {n - 1}</span></div>
       <SectionMap size={232} grid={g} input={sec.input} axis={slice.axis} index={slice.index} level={sec.level} scheme={sec.scheme} owner={sec.owner} kind={sec.kind} />
       <div className="hud-card__plane">
-        <span className="hud-card__k">Cutting plane</span>
-        <span className="hud-card__v"><Count>{slice.index}</Count> · <Count>{`${(slice.index * (grid?.voxel_size ?? 0)).toFixed(1)} mm`}</Count></span>
+        <span className="hud-card__v"><Count>{slice.index}</Count> · <Count>{`${Math.round((slice.index / Math.max(1, n - 1)) * 100)}%`}</Count></span>
         <span className="hud-card__bar"><span style={{ width: `${(slice.index / Math.max(1, n - 1)) * 100}%` }} /></span>
       </div>
       {layers && counts.length > 0 && (

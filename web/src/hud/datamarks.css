@@ -153,3 +153,7 @@
   .qdm-gantt__head { display: none; }
   .qdm-ruler__lv, .qdm-bar__on, .qdm-seg__i { transition: none; }
 }
+/* the log's cursor after the newest line, blinking as a terminal's does */
+.qdm-log__caret { display: inline-block; width: 6px; height: 11px; margin-left: 2px; vertical-align: -1px; background: var(--qs-ink); animation: qdm-blink 1s steps(1) infinite; }
+.qdm-log__row--new { animation: qdm-log-in .18s ease-out; }
+@keyframes qdm-log-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }

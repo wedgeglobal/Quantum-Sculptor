@@ -12,7 +12,7 @@ import type { HudModule } from '../hud/types'
 import { Slider } from '../qs/Slider'
 import { Segmented } from '../qs/Segmented'
 import { IconButton } from '../qs/Icon'
-import { animatable } from '../hud/motion'
+import { animatable, toggleMotion } from '../hud/motion'
 
 /** Sentence case for the library's short names ("polar" → "Polar"). */
 const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s)
@@ -27,10 +27,26 @@ const catOf = (family: string) => CATEGORIES.find((c) => c.fams.includes(family 
 
 const TIERS: { v: 1 | 2 | 3; t: string }[] = [{ v: 1, t: 'Primary' }, { v: 2, t: 'Secondary' }, { v: 3, t: 'Tertiary' }]
 
+/** A piece's size a step at a time (10%), with the size between. */
+export function SizeStep({ k }: { k: string }) {
+  const size = usePresent((p) => p.looks[k]?.size ?? 1)
+  const setLook = usePresent((p) => p.setLook)
+  const to = (v: number) => setLook(k, { size: Math.round(Math.min(3, Math.max(0.3, v)) * 10) / 10 })
+  return (
+    <span className="ly-size" data-tip="Size" data-tip-desc="This piece at a multiple of its own size." onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <button type="button" onClick={() => to(size - 0.1)} aria-label="Smaller">−</button>
+      <span>{Math.round(size * 100)}%</span>
+      <button type="button" onClick={() => to(size + 0.1)} aria-label="Larger">+</button>
+    </span>
+  )
+}
+
 /** One library row: the name, its motion switch when it has something to animate, and a dot when it
  *  is on the view. */
-export function LibRow({ on, name, drag, moves, onMoves, onToggle, onHover, onDragStart }: {
+export function LibRow({ on, name, drag, moves, onMoves, onToggle, onHover, onDragStart, sizeKey }: {
   on: boolean; name: string; drag?: string
+  /** On the view: its size stepper (the piece's key). */
+  sizeKey?: string
   /** Whether the piece moves with the clock; leave out for pieces with nothing to animate. */
   moves?: boolean; onMoves?: () => void
   onToggle: () => void; onHover?: (h: boolean) => void; onDragStart?: () => void
@@ -49,6 +65,7 @@ export function LibRow({ on, name, drag, moves, onMoves, onToggle, onHover, onDr
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle() } }}
       onPointerEnter={() => onHover?.(true)} onFocus={() => onHover?.(true)} onPointerLeave={() => onHover?.(false)} onBlur={() => onHover?.(false)}>
       <span className="mk-row__t">{name}</span>
+      {on && sizeKey && <SizeStep k={sizeKey} />}
       {moves != null && (
         <button type="button" className={'mk-anim' + (moves ? ' mk-anim--on' : '')} aria-pressed={moves} aria-label={`Animate ${name}`}
           data-tip={moves ? 'Animated' : 'Holds still'} data-tip-desc={moves ? 'Moves with the clock under Animate. Click to hold it still.' : 'Keeps what it shows while the animation plays. Click to animate it.'}
@@ -62,14 +79,15 @@ export function LibRow({ on, name, drag, moves, onMoves, onToggle, onHover, onDr
 }
 
 /** One family: a header that opens and closes it (with how many of its variants are on), then its
- *  variants as rows. Hover a row to see it on the view, click to turn it on or off. */
+ *  variants as rows. Hover a row to see it on the view, click to turn it on or off. ▶ beside a row: whether
+ *  it moves (the cutting plane: whether it sweeps); the same switch is under Animate and output. */
 function FamilyRows({ id, compose, open, onOpen, drag, onToggle, onPreview, onDragStart }: {
   id: string; compose: Record<string, string>; open: boolean; onOpen: () => void; drag: boolean
   onToggle: (fam: string, v: string, on: boolean) => void; onPreview?: (key: string | null, on: boolean) => void; onDragStart?: () => void
 }) {
   const f = familyOf(id)
   const still = usePresent((p) => p.still)
-  const setStill = usePresent((p) => p.setStill)
+  const sweep = usePresent((p) => p.stageReel.plane !== 'off')
   if (!f || !f.modules.length) return null
   const on = variantsOf(compose, f.id)
   return (
@@ -83,8 +101,8 @@ function FamilyRows({ id, compose, open, onOpen, drag, onToggle, onPreview, onDr
       {open && f.modules.map((m) => {
         const isOn = on.includes(m.id)
         return (
-          <LibRow key={m.id} on={isOn} name={cap(m.label)} drag={drag ? keyOf(m) : undefined}
-            moves={animatable(m) ? !still[keyOf(m)] : undefined} onMoves={() => setStill(keyOf(m), !still[keyOf(m)])}
+          <LibRow key={m.id} on={isOn} name={cap(m.label)} drag={drag ? keyOf(m) : undefined} sizeKey={m.family === 'plane' ? undefined : keyOf(m)}
+            moves={!animatable(m) ? undefined : m.family === 'plane' ? sweep : !still[keyOf(m)]} onMoves={() => toggleMotion(m)}
             onToggle={() => { onToggle(f.id, m.id, !isOn); onPreview?.(keyOf(m), !isOn) }}
             onHover={(h) => onPreview?.(h ? keyOf(m) : null, isOn)}
             onDragStart={onDragStart} />
@@ -147,7 +165,7 @@ export function LayerList() {
   const mods = chosenOf(p.compose)
   type Item = { k: string; name: string; m?: HudModule; text?: string; guide?: 'box' | 'floor' }
   const groups: { id: string; title: string; items: Item[] }[] = [
-    { id: 'scene', title: 'Scene', items: [
+    { id: 'guides', title: 'Guides and text', items: [
       ...(p.guides.box ? [{ k: 'guide:box', name: 'Bounding box', guide: 'box' as const }] : []),
       ...(p.guides.floor ? [{ k: 'guide:floor', name: 'Print grid', guide: 'floor' as const }] : []),
       ...p.texts.map((t) => ({ k: `text:${t.id}`, name: `Text · ${t.text}`, text: t.text })),
@@ -155,11 +173,25 @@ export function LayerList() {
     ...CATEGORIES.map((c) => ({ id: c.id, title: c.title, items: mods.filter((m) => catOf(m.family) === c.id).map((m) => ({ k: keyOf(m), name: nameOf(m), m })) })),
   ].filter((g) => g.items.length)
   if (!groups.length) return <span className="pd-empty">Nothing on the view yet.</span>
+  // take a whole group off the view (guides off, notes gone, pieces removed)
+  const clearGroup = (items: Item[]) => {
+    for (const it of items) {
+      if (it.guide) p.setGuides({ [it.guide]: false })
+      else p.removePiece(it.k)
+    }
+    p.setHl(null)
+  }
   return (
     <div className="ly" onPointerLeave={() => p.setHl(null)}>
+      <div className="ly-all">
+        <span className="ly-all__n">{groups.reduce((n, g) => n + g.items.length, 0)} on the view</span>
+        <button className="pd-chip pd-chip--s" onClick={() => clearGroup(groups.flatMap((g) => g.items))} data-tip="Clear all" data-tip-desc="Take every piece, guide and note off the view. Motion settings stay.">Clear all</button>
+      </div>
       {groups.map((g) => (
         <div key={g.id} className="ly-group">
-          <span className="ly-group__t">{g.title}<span className={'mk-count' + (g.items.length > 1 ? ' mk-count--many' : '')}>{g.items.length}</span></span>
+          <span className="ly-group__t">{g.title}<span className={'mk-count' + (g.items.length > 1 ? ' mk-count--many' : '')}>{g.items.length}</span>
+            <button className="ly-group__x" onClick={() => clearGroup(g.items)} data-tip={`Clear ${g.title.toLowerCase()}`} data-tip-desc="Take this whole group off the view.">Clear</button>
+          </span>
           {g.items.map((it) => <LayerRow key={it.k} {...it} />)}
         </div>
       ))}
@@ -173,7 +205,8 @@ function LayerRow({ k, name, m, text, guide }: { k: string; name: string; m?: Hu
   const open = p.sel === k
   const at = p.pos[`present|${k}`]
   const moved = !!at && !at.auto
-  const sized = !guide && (!m || (m.slot !== 'object' && m.slot !== 'full'))
+  // every piece has a size: corner pieces zoom, marks on the object scale their own measures (markScale)
+  const sized = !guide && m?.family !== 'plane'
   const changed = ['tier', 'weight', 'dash', 'size'].some((x) => look[x as keyof Look] != null)
   const remove = () => (guide ? p.setGuides({ [guide]: false }) : p.removePiece(k))
   const hasProps = !guide || guide === 'floor'
@@ -184,6 +217,13 @@ function LayerRow({ k, name, m, text, guide }: { k: string; name: string; m?: Hu
         onClick={toggle} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() } }}>
         <span className="ly-row__t">{name}{at?.z ? <em> · fitted at {Math.round(at.z * 100)}%</em> : null}</span>
         <span className="ly-row__tools" onClick={(e) => e.stopPropagation()}>
+          {sized && <SizeStep k={k} />}
+          {m && animatable(m) && (
+            <button type="button" className={'mk-anim' + ((m.family === 'plane' ? p.stageReel.plane !== 'off' : !p.still[k]) ? ' mk-anim--on' : '')} aria-label={`Animate ${name}`}
+              data-tip={m.family === 'plane' ? 'Sweep' : 'Animate'} onClick={() => toggleMotion(m)}>
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden><path d="M2 1.2v7.6L8.6 5z" /></svg>
+            </button>
+          )}
           {!guide && <IconButton name={look.hidden ? 'eyeOff' : 'eye'} size={22} dim={look.hidden} title={look.hidden ? 'Show' : 'Hide'} onClick={() => p.setLook(k, { hidden: !look.hidden })} />}
           <IconButton name="clear" size={22} title="Remove" onClick={remove} />
         </span>

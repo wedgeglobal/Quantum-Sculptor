@@ -21,13 +21,13 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ux-app: #393939; --ux-panel: #161616; --ux-head: #161616; --ux-body: #161616; --ux-field: #262626;
-    --ux-field-hi: #333333; --ux-fill: #393939; --ux-line: #393939; --ux-strong: #6F6F6F; --ux-on: #F4F4F4; --ux-on-ink: #161616;
+    --ux-app: #000000; --ux-panel: #1C1C1E; --ux-head: #1C1C1E; --ux-body: #1C1C1E; --ux-field: #2C2C2E;
+    --ux-field-hi: #3A3A3C; --ux-fill: #48484A; --ux-line: #38383A; --ux-strong: #636366; --ux-on: #636366; --ux-on-ink: #FFFFFF;
   }
 }
 :root[data-theme="dark"] {
-  --ux-app: #393939; --ux-panel: #161616; --ux-head: #161616; --ux-body: #161616; --ux-field: #262626;
-  --ux-field-hi: #333333; --ux-fill: #393939; --ux-line: #393939; --ux-strong: #6F6F6F; --ux-on: #F4F4F4; --ux-on-ink: #161616;
+  --ux-app: #000000; --ux-panel: #1C1C1E; --ux-head: #1C1C1E; --ux-body: #1C1C1E; --ux-field: #2C2C2E;
+    --ux-field-hi: #3A3A3C; --ux-fill: #48484A; --ux-line: #38383A; --ux-strong: #636366; --ux-on: #636366; --ux-on-ink: #FFFFFF;
 }
 
 /* never all caps, never rounded */
@@ -45,8 +45,9 @@
 .ux-panel__toggle:hover { background: var(--ux-field-hi); }
 .ux-panel--sub > .ux-panel__h .ux-panel__toggle:hover { background: none; }
 .ux-panel__toggle:focus-visible { outline: 2px solid var(--qs-ink); outline-offset: -2px; }
-.ux-panel__t { order: 0; font: 500 12px/1.33 var(--qs-mono); letter-spacing: var(--qs-track); color: var(--qs-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ux-panel--sub > .ux-panel__h .ux-panel__t { font-weight: 400; color: var(--qs-ink2); }
+.ux-panel__t { order: 0; font: 500 13px/1.33 var(--qs-mono); letter-spacing: var(--qs-track); color: var(--qs-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ux-panel--sub > .ux-panel__h .ux-panel__t { font: 400 12px/1.33 var(--qs-mono); color: var(--qs-ink2); }
+.ux-panel--sub > .ux-panel__h .ux-panel__toggle:hover .ux-panel__t { color: var(--qs-ink); }
 .ux-panel__aside { order: 1; margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font: 400 12px/1 var(--qs-mono); letter-spacing: var(--qs-track); color: var(--qs-ink3); white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ux-chev { order: 2; width: 16px; height: 16px; flex: none; position: relative; margin-left: auto; }
 .ux-panel__aside + .ux-chev { margin-left: 0; }
@@ -54,7 +55,7 @@
 .ux-panel--open > .ux-panel__h .ux-chev::before { transform: translate(0, 3px) rotate(-135deg); }
 .ux-panel__tools { display: inline-flex; align-items: center; gap: 0; padding-right: 8px; }
 .ux-panel__b { display: flex; flex-direction: column; gap: 16px; padding: 4px 16px 24px; }
-.ux-panel--sub > .ux-panel__b { padding: 4px 0 16px; gap: 16px; }
+.ux-panel--sub > .ux-panel__b { padding: 4px 0 16px 12px; gap: 14px; margin-left: 3px; border-left: 1px solid var(--ux-line); }
 .ux-panel__b--flush { padding: 0 0 8px; gap: 0; }
 
 /* ── form rows: label above a full-width control ────────────────────── */

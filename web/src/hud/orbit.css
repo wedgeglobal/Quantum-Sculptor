@@ -51,3 +51,17 @@
 
 /* live ring: fades out 800ms after the camera stops */
 .qh-live { transition: opacity 320ms var(--qs-ease); }
+
+/* hairline marks: the ring round the object */
+.qh-thin .qh-k1, .qh-thin .qh-k2, .qh-thin .qh-k3, .qh-thin .qh-k4 { stroke-width: .75px; }
+
+/* gimbal values: three figures over the four stations, hairline pills */
+.qh-gv { display: inline-flex; flex-direction: column; gap: 10px; color: var(--qs-ink); }
+.qh-gv__rows { display: grid; grid-template-columns: 36px auto; column-gap: 12px; row-gap: 4px; font: 400 10px/1.3 var(--qs-mono); font-variant-numeric: tabular-nums; }
+.qh-gv__k { color: var(--qs-ink3); }
+.qh-gv__v { transition: color .3s; }
+.qh-gv__v--live { color: var(--qs-ink); font-weight: 500; }
+.qh-gv__st { display: flex; gap: 4px; }
+.qh-gv__b { all: unset; height: 18px; padding: 0 7px; border-radius: 999px; box-shadow: inset 0 0 0 .75px var(--qs-ink4); font: 400 10px/18px var(--qs-mono); color: var(--qs-ink3); cursor: pointer; }
+.qh-gv__b:hover { box-shadow: inset 0 0 0 .75px var(--qs-ink); color: var(--qs-ink); }
+.qh-gv__b--on { background: var(--qs-sel); color: var(--qs-ink); box-shadow: inset 0 0 0 .75px var(--qs-ink); }

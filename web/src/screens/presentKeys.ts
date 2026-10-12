@@ -3,7 +3,7 @@
 // T turntable, P play the animation, ⌫ removes the selected piece, Esc steps back out.
 import { useEffect } from 'react'
 import { usePresent } from '../present'
-import { isRecording, toggleRecording } from './capture'
+import { isRecording, stopTake, toggleRecording } from './capture'
 
 /** Step through the saved compositions. */
 function step(d: number) {
@@ -20,7 +20,7 @@ export function usePresentKeys() {
     const key = (e: KeyboardEvent) => {
       if ((e.target instanceof Element && e.target.closest('input,textarea,select,[contenteditable="true"]')) || e.metaKey || e.ctrlKey || e.altKey) return
       const s = usePresent.getState()
-      if (e.key === 'Escape' && isRecording()) { toggleRecording(); return }
+      if (e.key === 'Escape' && isRecording()) { if (!stopTake()) toggleRecording().catch(() => {}); return }
       if (e.key === 'h' || e.key === 'H') s.setBare(!s.bare)
       else if (e.key === 'c' || e.key === 'C') s.setComposing(!s.composing)
       else if ((e.key === 'Backspace' || e.key === 'Delete') && s.composing && s.sel) { e.preventDefault(); s.removePiece(s.sel) }

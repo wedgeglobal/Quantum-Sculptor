@@ -37,6 +37,10 @@ export function startEngine() {
   worker.postMessage({ type: 'start', relay: RELAY })
 }
 
+// developing: a hot update of this module (or of the worker and the Python it loads) starts a fresh
+// worker; stop the old one, or each update leaves a whole Python runtime running in the tab
+import.meta.hot?.dispose(() => { worker?.terminate(); worker = null })
+
 export async function engineFetch(path: string, init?: RequestInit): Promise<Response> {
   startEngine()
   const method = init?.method ?? 'GET'

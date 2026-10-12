@@ -23,6 +23,12 @@ function drawn(l: SplitLayer): boolean {
   return l === 'model' ? !!s.modelMesh : l === 'voxels' ? !!s.gridData : l === 'processed' ? !!s.procData : !!s.resultMesh
 }
 
+/** Something on the view works with the cutting plane: the plane itself, a slice card, a scan piece
+ *  (plane + index, layer stack). Only then does it sweep. */
+export function planeUsed(compose = usePresent.getState().compose): boolean {
+  return ['plane', 'slicecard', 'scan'].some((f) => (compose[f] ?? 'off').split(',').some((v) => v && v !== 'off'))
+}
+
 /** Seconds of one full cutting-plane cycle (there and back when it bounces). */
 const planeCycle = (r: Reel) => r.planeSec * (r.planeMode === 'bounce' ? 2 : 1)
 
@@ -32,16 +38,19 @@ export function storySegments(reel: Reel): Segment[] {
   const s = useStore.getState()
   const evolve = s.q.mode === 'nations', h = s.evolve.history
   const list: Omit<Segment, 'start'>[] = []
-  if (reel.segs.model) list.push({ stage: 'model', t: 'Model', dur: reel.sec })
-  if (reel.segs.voxels) list.push({ stage: 'voxels', t: 'Voxels', dur: reel.sec })
+  const hold = reel.hold
+  if (reel.segs.model) list.push({ stage: 'model', t: 'Model', dur: hold.model })
+  if (reel.segs.voxels) list.push({ stage: 'voxels', t: 'Voxels', dur: hold.voxels })
   if (reel.segs.quantum) {
-    if (evolve && h) list.push({ stage: 'evolve', t: 'Evolve', dur: s.evolve.turns / Math.max(0.5, reel.tps), turns: s.evolve.turns })
-    else list.push({ stage: evolve ? 'evolve' : 'quantum', t: evolve ? 'Evolve' : 'Quantum', dur: reel.sec })
+    // Evolve plays its turns, then holds the last one
+    if (evolve && h) list.push({ stage: 'evolve', t: 'Evolve', dur: s.evolve.turns / Math.max(0.5, reel.tps) + hold.quantum, turns: s.evolve.turns })
+    else list.push({ stage: evolve ? 'evolve' : 'quantum', t: evolve ? 'Evolve' : 'Quantum', dur: hold.quantum })
   }
   // with the plane running during the mesh, the mesh holds at least one full sweep
-  if (reel.segs.mesh) list.push({ stage: 'mesh', t: 'Mesh', dur: reel.plane === 'mesh' ? Math.max(reel.sec, planeCycle(reel)) : reel.sec })
-  // each step grows up out of the one before it (the first out of the last, when the loop goes round)
-  const wipe = Math.min(3, Math.max(1.2, reel.sec * 0.6))
+  if (reel.segs.mesh) list.push({ stage: 'mesh', t: 'Mesh', dur: reel.plane === 'mesh' ? Math.max(hold.mesh, planeCycle(reel)) : hold.mesh })
+  // each step grows up out of the one before it (the first out of the last, when the loop goes round),
+  // taking the morph time
+  const wipe = Math.max(0.2, reel.morph)
   list.forEach((x, i) => {
     const prev = list[i - 1] ?? (usePresent.getState().loop && list.length > 1 ? list[list.length - 1] : null)
     if (reel.blend !== 'wipe' || !prev || layerOf(prev.stage) === layerOf(x.stage) || !drawn(layerOf(prev.stage)) || !drawn(layerOf(x.stage))) return
@@ -66,7 +75,7 @@ function sweepAt(r: Reel, u: number): number {
 export function passLength(reel: Reel, cycles: Cycles): number {
   const st = storySegments(reel).reduce((a, x) => a + x.dur, 0)
   const cy = cycles.sec * Math.max(cycles.shading ? SHADINGS.length : 0, cycles.light ? LIGHTS.length : 0, cycles.backdrop ? BACKDROPS.length : 0)
-  const pl = reel.on && reel.plane === 'loop' && !st ? planeCycle(reel) : 0
+  const pl = reel.plane === 'loop' && !st && planeUsed() ? planeCycle(reel) : 0
   return Math.max(0, st, cy, pl)
 }
 
@@ -92,6 +101,13 @@ export async function recordPass() {
 export function useAnimator() {
   const playing = usePresent((p) => p.playing)
   const seekKey = usePresent((p) => p.seekKey)
+  // one thing plays the turns at a time: the clock (Animate) or Evolve's own player; starting either
+  // stops the other
+  useEffect(() => {
+    const offA = usePresent.subscribe((p, q) => { if (p.playing && !q.playing && useStore.getState().evolve.playing) useStore.getState().pause() })
+    const offB = useStore.subscribe((s, q) => { if (s.evolve.playing && !q.evolve.playing && usePresent.getState().playing) usePresent.getState().setPlaying(false) })
+    return () => { offA(); offB() }
+  }, [])
   useEffect(() => {
     let stage = '', turn = -1, plane = -1, shade = -1, light = -1, back = -1, raf = 0
     const setPlane = (live: boolean) => { if (usePresent.getState().planeLive !== live) usePresent.setState({ planeLive: live }) }
@@ -105,10 +121,14 @@ export function useAnimator() {
       const n = st.grid?.n ?? 0
       const lo = Math.round(Math.min(r.from, r.to) * (n - 1)), hi = Math.round(Math.max(r.from, r.to) * (n - 1))
       const putPlane = (f: number, axis?: 'z') => {
-        const k = Math.round(lo + f * (hi - lo)), turn = axis && useStore.getState().slice.axis !== axis
+        // the plane moves `planeStep` layers at a time (1: every layer)
+        const step = Math.max(1, Math.round(r.planeStep || 1))
+        const k = Math.min(hi, lo + Math.round((f * (hi - lo)) / step) * step), turn = axis && useStore.getState().slice.axis !== axis
         if (k !== plane || turn) { plane = k; useStore.getState().setSlice(turn ? { axis, index: k } : { index: k }) }
       }
       const segs = storySegments(r)
+      // the plane sweeps only when it is on the view (Library · Scene · Cutting plane)
+      const sweep = planeUsed(p.compose)
       let planeLive = false, wipe: { below: SplitLayer; above: SplitLayer } | null = null
       if (segs.length) {
         const seg = segs.find((x) => t < x.start + x.dur) ?? segs[segs.length - 1]
@@ -131,10 +151,10 @@ export function useAnimator() {
         if (n) {
           // a wipe owns the plane while the step rises; otherwise it sweeps as set
           if (rising) { planeLive = true; putPlane(u / seg.wipe!, 'z') }
-          else if (r.plane === 'loop') { planeLive = true; putPlane(sweepAt(r, t)) }
-          else if (r.plane === 'mesh' && seg.stage === 'mesh') { planeLive = true; putPlane(sweepAt(r, u)) }
+          else if (sweep && r.plane === 'loop') { planeLive = true; putPlane(sweepAt(r, t)) }
+          else if (sweep && r.plane === 'mesh' && seg.stage === 'mesh') { planeLive = true; putPlane(sweepAt(r, u)) }
         }
-      } else if (r.on && r.plane === 'loop' && n) { planeLive = true; putPlane(sweepAt(r, t)) }
+      } else if (sweep && r.plane !== 'off' && n) { planeLive = true; putPlane(sweepAt(r, t)) }
       setPlane(planeLive)
       setWipe(wipe)
       const c = p.cycles, k = Math.floor(t / Math.max(0.5, c.sec))

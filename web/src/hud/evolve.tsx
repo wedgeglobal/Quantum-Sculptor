@@ -1,6 +1,7 @@
 // Evolve for Present: Peiyan's nations (app/nations.py) as HUD figures. Each follows the turn on screen,
 // so they play with the history: the roster, territory over the whole history, the chronicle, the
 // relationships, and the record. Nation colour is never alone: every nation carries its letter.
+import type { ReactNode } from 'react'
 import { useMemo } from 'react'
 import { useStore } from '../store'
 import type { NationEvent, NationsHistory } from '../api'
@@ -26,8 +27,18 @@ function Head({ t, n }: { t: string; n?: string }) {
 }
 
 const Empty = () => (
-  <div className="hev"><Head t="Evolve" /><p className="hev-empty">Run Evolve (Quantum → Evolve) to show the nations.</p></div>
+  <div className="hev hev--wait">
+    <svg width="48" height="16" viewBox="0 0 48 16" aria-hidden>{[0, 1, 2, 3, 4].map((i) => <rect key={i} x={i * 10 + 0.5} y={0.5} width={7} height={15} style={{ fill: 'none', stroke: 'var(--qs-ink4)', strokeDasharray: '2 2' }} />)}</svg>
+    <span className="hev-wait">Evolve has not run · Quantum → Evolve → Run</span>
+  </div>
 )
+
+/** An Evolve piece, or (no history yet) a quiet note saying how to get one: the pieces have nothing
+ *  else to draw, and their titles and sentences give way on the view. */
+export function Gate({ children }: { children: ReactNode }) {
+  const has = useStore((s) => s.proc?.mode === 'nations' && !!s.evolve.history)
+  return has ? <>{children}</> : <Empty />
+}
 
 /** Totals over the history up to `turn`. */
 function tally(h: NationsHistory, turn: number) {
@@ -60,7 +71,7 @@ export function Nations() {
   const shown = alive.slice(0, 12)
   return (
     <div className="hev hev--nations">
-      <Head t="Nations" n={`turn ${turn} / ${h.turns.length - 1}`} />
+      <Head t="Nations" n={`T ${turn} / ${h.turns.length - 1}`} />
       <div className="hev-roster">
         {shown.map(([i, v]) => (
           <div key={i} className="hev-row">
@@ -102,7 +113,7 @@ export function Territory() {
   const px = paths.x(turn)
   return (
     <div className="hev hev--territory">
-      <Head t="Territory" n={`share of the cells per nation · ${h.turns.length - 1} turns`} />
+      <Head t="Territory" />
       <svg width={W} height={H + MARK + 16} viewBox={`0 0 ${W} ${H + MARK + 16}`} className="hev-svg">
         {paths.out.map((p) => <path key={p.i} d={p.d} fill={nationColor(p.i, theme)} opacity={0.9} />)}
         <rect x={0} width={W} height={H} fill="var(--qs-bg)" opacity={0.62} className="hev-glide" style={{ transform: `translateX(${px}px)` }} />
@@ -136,7 +147,7 @@ export function Chronicle() {
   const rows = h.turns.slice(1, turn + 1).flatMap((r) => r.events.filter((e) => e.type !== 'ally' && e.type !== 'rift').map((e) => ({ t: r.turn, e }))).slice(-7).reverse()
   return (
     <div className="hev hev--chronicle">
-      <Head t="Chronicle" n={`to turn ${turn}`} />
+      <Head t="Chronicle" n={`T ${turn}`} />
       {rows.length ? (
         <ol className="hev-log">
           {rows.map(({ t, e }, k) => (
@@ -181,11 +192,10 @@ export function Relations() {
   const at = rec.home.map((p) => (p ? place(p) : null))
   const radius = (i: number) => 5 + 11 * Math.sqrt((rec.size[i] ?? 0) / big)
   const tie = new Map(rec.ties.map(([i, j, t]) => [`${i}-${j}`, t]))
-  const allies = rec.ties.filter(([, , t]) => t >= 0.5).length
   const f1 = (v: number) => +v.toFixed(1)
   return (
     <div className="hev hev--relations">
-      <Head t="Relations" n={`T ${turn} · ${allies} allied · ${rec.attacks.length} attacks`} />
+      <Head t="Relations" n={`T ${turn}`} />
       <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`} className="hev-svg hev-graph">
         <defs><marker id="hev-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 8 4 0 8Z" fill={RED} /></marker></defs>
         {rec.borders.map(([i, j]) => {
@@ -225,6 +235,61 @@ export function Relations() {
   )
 }
 
+// ── relations, ranked: the nations in a row by territory; ties above, this turn's attacks below ─────
+
+/** The same relations, ordered: the nations along a line by territory (they slide as it changes), each
+ *  sized by its land with a tick for what it gained or lost this turn; borders and alliances arc above
+ *  the line, weighted by their ties, this turn's attacks arc below in red. */
+export function RelationsRanked() {
+  const { history: h, turn, theme } = useEvolve()
+  if (!h) return <Empty />
+  const rec = h.turns[turn], prev = h.turns[Math.max(0, turn - 1)]
+  const W = 336, H = 188, base = 98, padX = 18
+  const alive = rec.size.map((v, i) => [i, v] as const).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
+  const big = Math.max(1, ...rec.size)
+  const step = (W - 2 * padX) / Math.max(1, alive.length - 1 || 1)
+  const x = new Map(alive.map(([i], r) => [i, alive.length === 1 ? W / 2 : padX + r * step]))
+  const radius = (i: number) => 3 + 9 * Math.sqrt((rec.size[i] ?? 0) / big)
+  const tie = new Map(rec.ties.map(([i, j, t]) => [`${Math.min(i, j)}-${Math.max(i, j)}`, t]))
+  const arc = (a: number, b: number, up: boolean) => {
+    const xa = x.get(a), xb = x.get(b)
+    if (xa == null || xb == null) return null
+    const r = Math.abs(xb - xa) / 2
+    return `M${xa.toFixed(1)} ${base}A${r.toFixed(1)} ${Math.min(r, up ? 80 : 70).toFixed(1)} 0 0 ${(xa < xb) === up ? 1 : 0} ${xb.toFixed(1)} ${base}`
+  }
+  return (
+    <div className="hev hev--ranked">
+      <Head t="Relations" n={`T ${turn}`} />
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="hev-svg" style={{ overflow: 'visible' }}>
+        <defs><marker id="hev-arrow2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 8 4 0 8Z" fill={RED} /></marker></defs>
+        <line x1={padX - 8} x2={W - padX + 8} y1={base} y2={base} strokeWidth={0.75} style={{ stroke: 'var(--qs-ink4)' }} />
+        {rec.borders.map(([i, j]) => {
+          const d = arc(i, j, true)
+          if (!d) return null
+          const t = tie.get(`${Math.min(i, j)}-${Math.max(i, j)}`) ?? 0
+          // the arc as a CSS path, so it eases to its new span as the order changes
+          return <path key={`b${Math.min(i, j)}-${Math.max(i, j)}`} className="hev-arc" style={css({ d: `path("${d}")`, fill: 'none', stroke: t >= 0.5 ? 'var(--qs-ink)' : 'var(--qs-ink4)', strokeWidth: 0.75 + 2.5 * t, opacity: 0.35 + 0.65 * t })} />
+        })}
+        {rec.attacks.map(([i, j]) => {
+          const d = arc(i, j, false)
+          return d ? <path key={`${turn}:${i}>${j}`} d={d} className="hev-atk" pathLength={1} markerEnd="url(#hev-arrow2)" /> : null
+        })}
+        {alive.map(([i, v]) => {
+          const r = radius(i), was = prev.size[i] ?? 0, dv = v - was
+          const tick = Math.max(-14, Math.min(14, (dv / big) * 60))
+          return (
+            <g key={i} className="hev-nat" style={css({ transform: `translate(${(x.get(i) ?? 0).toFixed(1)}px, ${base}px)` })}>
+              <circle style={css({ r })} fill={nationColor(i, theme)} stroke="var(--qs-bg)" strokeWidth={1.5} />
+              {Math.abs(tick) > 0.5 && <line x1={0} x2={0} y1={r + 4} y2={r + 4 + Math.abs(tick)} strokeWidth={2} style={{ stroke: dv > 0 ? 'var(--qs-ink)' : RED }} />}
+              <text className="hev-label" textAnchor="middle" style={css({ transform: `translate(0px, ${(-r - 6).toFixed(1)}px)` })}>{nationName(i)}</text>
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
 // ── record: the history in figures ───────────────────────────────────────────────────────────────
 export function Record() {
   const { history: h, turn } = useEvolve()
@@ -237,7 +302,7 @@ export function Record() {
   ]
   return (
     <div className="hev hev--record">
-      <Head t="Record" n={`${h.k} founded · to turn ${turn}`} />
+      <Head t="Record" n={`T ${turn}`} />
       <div className="hev-figs">
         {figs.map(([k, v, note]) => (
           <div key={k} className="hev-fig"><span className="hev-k">{k}</span><span className="hev-big"><Num v={v} ms={260} /></span><span className="hev-note">{note}</span></div>
@@ -295,7 +360,7 @@ export function Picked() {
   const mine = h.turns.slice(1, turn + 1).flatMap((r) => r.events.filter((e) => text(e).includes(i))).length
   return (
     <div className="hev hev--picked">
-      <Head t="Nation" n={sel == null ? 'largest' : 'picked'} />
+      <Head t="Nation" />
       <div className="hev-pick">
         <Chip i={i} theme={theme} />
         <span className="hev-v"><Num v={rec.size[i] ?? 0} ms={260} /> cells · <Num v={(100 * (rec.size[i] ?? 0)) / total} ms={260} /> %</span>

@@ -39,6 +39,26 @@
 }
 .qs-hud-close { animation: qs-hud-close 480ms var(--qs-ease, ease-out) both; }
 
+/* bounds v1: each corner draws in once (no endless motion: it would repaint the whole view every frame) */
+@keyframes qs-hud-corner-in { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.qs-hud-corner { animation: qs-hud-corner-in 520ms var(--qs-ease, ease-out) both; }
+
 @media (prefers-reduced-motion: reduce) {
-  .qs-hud-lock, .qs-hud-breathe, .qs-hud-close { animation: none; }
+  .qs-hud-lock, .qs-hud-breathe, .qs-hud-close, .qs-hud-corner { animation: none; }
 }
+
+/* selection v2 on its own: the corners also turn a quarter as they close in. */
+@keyframes qs-hud-lock-turn {
+  0% { transform: scale(1.8) rotate(45deg); opacity: 0; }
+  70% { transform: scale(.94) rotate(-4deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+.qs-hud-lock--turn { animation: qs-hud-lock-turn 420ms cubic-bezier(.2, .8, .2, 1) both; }
+
+/* marks drawn on the object itself (selection, tracking, callouts): a thin edge of ground under each
+   line, so they read over a light model as over the dark ground */
+.qs-hud--lift { filter: drop-shadow(0 0 .75px var(--qs-bg)) drop-shadow(0 0 1.5px color-mix(in srgb, var(--qs-bg) 70%, transparent)); }
+
+/* callouts: the text swaps in when the step changes */
+@keyframes qs-hud-swap { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.qs-hud-swap { animation: qs-hud-swap 320ms var(--qs-ease, ease-out) both; transform-box: fill-box; }

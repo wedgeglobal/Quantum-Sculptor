@@ -4,7 +4,8 @@
 // This panel follows the turn on screen: the turn player, each nation's question, odds and answer,
 // the relationship graph, and the chronicle of the whole history.
 import { useCallback, useMemo, useState, type ReactNode } from 'react'
-import { useStore, TURNS_PER_SECOND, type Morph } from '../store'
+import { useStore, type Morph } from '../store'
+import { usePresent } from '../present'
 import type { NationAction, NationAsk, NationEvent, NationsHistory, NationTurn } from '../api'
 import { Panel } from '../ui/Panel'
 import { Slider } from '../qs/Slider'
@@ -290,22 +291,26 @@ function TurnBlk({ rec, history, theme }: { rec: NationTurn; history: NationsHis
   const voxels = rec.size.reduce((a, v) => a + v, 0)
   const atEnd = ev.turn >= ev.turns
   const go = (t: number) => { pause(); setTurn(t) }
+  const tps = usePresent((p) => p.stageReel.tps)
   const tally = TALLY.map(([a, label]) => [label, rec.action.filter((x) => x === a).length] as const).filter(([, c]) => c > 0)
   return (
-    <Blk id="ev-turn" label="Turn" note={ev.playing ? `playing · ${TURNS_PER_SECOND} turns/s` : ev.frameTurn !== ev.turn ? 'loading the territory' : undefined}>
+    <Blk id="ev-turn" label="Turn" note={ev.playing ? `playing · ${tps} turns/s` : ev.frameTurn !== ev.turn ? 'loading the territory' : undefined}>
       <div className="heroes">
         <Hero k="Turn" v={ev.turn} unit={`/ ${ev.turns}`} note={ev.turn === 0 ? `founding · ${history.k} nations` : `${fmt.int(voxels)} voxels`} />
         <Hero k="Alive" v={alive} note={`of ${rec.size.length} so far · ${history.total} in all`} />
       </div>
       <Slider label="Scrub" value={ev.turn} min={0} max={Math.max(1, ev.turns)} step={1} ticks={Math.min(Math.max(1, ev.turns), 12)}
         format={(v) => `${v} / ${ev.turns}`} onChange={(v) => go(v)} />
+      {/* one speed for the turns, here and under Animate and output · Evolve turns */}
+      <Slider label="Turns per second" value={tps} min={0.5} max={20} step={0.5} format={(v) => `${v} / s · ${(ev.turns / v).toFixed(0)} s in all`}
+        onChange={(v) => { usePresent.getState().setStageReel({ tps: v }); if (ev.playing) play(v) }} />
       <div className="ev-row">
         <span className="ev-transport">
           <Pill tip="Previous turn" desc="Step one turn back" label="Previous turn" disabled={ev.turn <= 0} onClick={() => go(ev.turn - 1)}>
             <Icon name="chevRight" size={12} style={{ transform: 'scaleX(-1)' }} />
           </Pill>
-          <Pill on={ev.playing} tip={ev.playing ? 'Pause' : atEnd ? 'Replay' : 'Play'} desc={`Play the turns at ${TURNS_PER_SECOND} a second`}
-            onClick={() => (ev.playing ? pause() : play())}>
+          <Pill on={ev.playing} tip={ev.playing ? 'Pause' : atEnd ? 'Replay' : 'Play'} desc={`Play the turns at ${tps} a second`}
+            onClick={() => (ev.playing ? pause() : play(tps))}>
             <Icon name={ev.playing ? 'pause' : atEnd ? 'replay' : 'play'} size={12} />
             {ev.playing ? 'Pause' : atEnd ? 'Replay' : 'Play'}
           </Pill>

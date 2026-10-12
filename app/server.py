@@ -525,6 +525,63 @@ def apply_processed(raw, meta):
     return S.proc_meta
 
 
+# ── 处理结果的缓存 ──────────────────────────────────────────────────────────
+# 同一个网格、同样的参数和实验名，结果总是一样的（种子就是实验名）：算过一次就存进 grids/，
+# 再要的时候直接读回来。高斯、模拟和「演化」都缓存（Atlas 按分块另有缓存）。示例形状在默认参数下
+# 的结果随网站一起发布（web/public/cache/）；在浏览器里找不到时，从网站上按名字取一次。
+SHIPPED = Path(os.environ.get("QS_SHIPPED_DIR") or ROOT / "web" / "public" / "cache")
+SHIPPED_URL = os.environ.get("QS_SHIPPED_URL")
+
+
+def _result_name(grid, mode, params, run, extra=None):
+    """缓存文件名：网格（取到千分位，免得不同机器的浮点尾数对不上）、方式、参数、实验名。"""
+    h = hashlib.sha256()
+    h.update(str(grid.shape).encode())
+    h.update(np.round(np.asarray(grid, dtype=np.float64), 3).astype(np.float32).tobytes())
+    h.update(json.dumps({"mode": mode, "params": params, "run": run, "extra": extra}, sort_keys=True, default=str).encode())
+    return f"result_{h.hexdigest()[:20]}.npz"
+
+
+def _load_result(name):
+    """缓存里的结果（np.load 的结果），没有就是 None。"""
+    for folder in (GRIDS, SHIPPED):
+        path = folder / name
+        if path.exists():
+            try:
+                return np.load(path, allow_pickle=False)
+            except Exception:  # noqa: BLE001  坏了的文件当没有
+                pass
+    if SHIPPED_URL:
+        try:
+            import requests
+            r = requests.get(f"{SHIPPED_URL.rstrip('/')}/{name}", timeout=15)
+            if r.status_code == 200 and r.content[:2] == b"PK":
+                GRIDS.mkdir(exist_ok=True)
+                (GRIDS / name).write_bytes(r.content)
+                return np.load(GRIDS / name, allow_pickle=False)
+        except Exception:  # noqa: BLE001  取不到就照常算
+            pass
+    return None
+
+
+def _save_result(name, **arrays):
+    try:
+        GRIDS.mkdir(exist_ok=True)
+        with open(GRIDS / name, "wb") as f:
+            np.savez_compressed(f, **arrays)
+    except OSError:
+        pass
+
+
+def _evolved_from(saved):
+    """从缓存文件还原一段「演化」历史（和 _evolve 的结果同样的形状）。"""
+    info = json.loads(str(saved["info"]))
+    frames = saved["frames"]
+    return SimpleNamespace(final=saved["final"], dry=info.get("dry"),
+                           frames={**info["frames"], "data": [np.ascontiguousarray(f) for f in frames]},
+                           nations=info["nations"])
+
+
 @app.post("/api/process")
 def process():
     b = body()
@@ -541,6 +598,16 @@ def process():
         return evolve(grid, grid_id, run, params, meta)
 
     if mode != "atlas":
+        name = _result_name(grid, mode, params, run, tiling.tile_shape(grid.shape[0], tile_mode, atlas_bits()) if mode == "emulator" else None)
+        saved = _load_result(name)
+        if saved is not None and "raw" in saved:
+            with S.lock:
+                if S.grid_id != grid_id:
+                    raise Superseded()
+                meta.update(cached=True, seconds=0)
+                if mode == "emulator":
+                    meta["tiles"] = {"mode": tile_mode, **grid_tiles()[tile_mode]}
+                return jsonify(status="done", meta=apply_processed(saved["raw"].astype(np.float64), meta))
         with heavy(PROCESS) as check:
             t0 = time.time()
             if mode == "gaussian":
@@ -551,6 +618,7 @@ def process():
                 seed = int(hashlib.sha256(run.encode()).hexdigest()[:8], 16)
                 raw = emulator.quantum_blur_tiled(grid, shape, seed=seed, check=check, **params)
             meta["seconds"] = round(time.time() - t0, 3)
+            _save_result(name, raw=np.asarray(raw, dtype=np.float32))
             with S.lock:
                 if S.grid_id != grid_id:
                     raise Superseded()               # 算的时候网格换了
@@ -678,10 +746,19 @@ def apply_evolved(result, meta):
 def evolve(grid, grid_id, run, params, meta):
     """「演化」：把体素分成几个国家，一回合一回合地改领土。随机数用本机的，种子就是实验名。"""
     _check_nations(grid, params)
+    name = _result_name(grid, "nations", params, run)
+    saved = _load_result(name)
+    if saved is not None and "frames" in saved:
+        with S.lock:
+            if S.grid_id != grid_id:
+                raise Superseded()
+            return jsonify(status="done", meta=apply_evolved(_evolved_from(saved), {**meta, "cached": True, "seconds": 0}))
     with heavy(PROCESS) as check:
         t0 = time.time()
         seed = int(hashlib.sha256(run.encode()).hexdigest()[:8], 16)
         result = _evolve(grid, params, check, seed=seed)
+        info = {"dry": result.dry, "nations": result.nations, "frames": {k: v for k, v in result.frames.items() if k != "data"}}
+        _save_result(name, final=result.final, frames=np.stack(result.frames["data"]), info=np.array(json.dumps(info, default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o))))
         with S.lock:
             if S.grid_id != grid_id:
                 raise Superseded()
@@ -1222,6 +1299,7 @@ def build_mesh(b, now, check):
     close = clamp(b.get("close"), 0.0, 8.0, 0.0)
 
     voxel_ops = vfilter != "none" or grow != 0 or close > 0
+    skipped = []
     if method == "threshold" and refine == 1 and not voxel_ops:
         mesh, total = pipeline.grid_to_mesh(now.processed, level=level, keep=keep, smooth=smooth)
     else:
@@ -1239,9 +1317,15 @@ def build_mesh(b, now, check):
             shape = levelset.from_density(now.processed, level, refine)
         check()
         shape = levelset.fit(shape, abs(grow) + close + vwidth + 4)
-        shape = levelset.smooth(shape, vfilter, vwidth)
-        shape = levelset.close(shape, close)
-        shape = levelset.offset(shape, grow)
+        # 体素运算会把太薄的壁整个抹掉：哪一步让表面消失，就跳过那一步，并在报告里说
+        for name, op in (("smooth", lambda x: levelset.smooth(x, vfilter, vwidth)),
+                         ("close", lambda x: levelset.close(x, close)),
+                         ("grow", lambda x: levelset.offset(x, grow))):
+            out = op(shape)
+            if out.sdf.min() < 0 < out.sdf.max():
+                shape = out
+            else:
+                skipped.append(name)
         check()
         mesh, total = pipeline.finish_mesh(levelset.to_mesh(shape), keep=keep, smooth=smooth)
 
@@ -1249,7 +1333,7 @@ def build_mesh(b, now, check):
     printed, report = pipeline.prepare_for_print(mesh, now.scale, height)
     report.update(total_parts=total, level=level, keep=keep, smooth=smooth, height=height,
                   method=method, refine=refine, amount=amount, field=field, vfilter=vfilter,
-                  vwidth=vwidth, grow=grow, close=close, proc_id=now.proc_id,
+                  vwidth=vwidth, grow=grow, close=close, proc_id=now.proc_id, skipped=skipped,
                   fine_voxel_mm=round(report["voxel_mm"] / refine, 3))
     return mesh, printed, report
 

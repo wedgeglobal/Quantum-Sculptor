@@ -3,10 +3,12 @@
 // Modules that follow the object draw over the whole view; the rest sit in slots (corners, edges)
 // stacked so they never overlap each other.
 import { Moving } from './Moving'
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import type { HudCtx, HudModule, Rect } from './types'
-import { TIER_OPACITY, boxOf, chosenOf, composeLayout, keyOf, savePng, settle, type Composition, type Placement } from './compose'
+import { TIER_OPACITY, boxOf, chosenOf, composeLayout, keyOf, settle, type Composition, type Placement } from './compose'
+import { FAMILIES } from './registry'
+import { MarkScale } from './markScale'
 import type { Pad, Slot } from './tidy'
 import type { Look } from '../present'
 import './composer.css'
@@ -50,6 +52,9 @@ export interface Edit {
   onResize?: (k: string, size: number) => void
 }
 const SIZE_MIN = 0.5, SIZE_MAX = 3
+/** The layout module: pieces snap to a 24 px grid inset by one module, and resize in whole modules. */
+const MODULE = 24
+const snap = (v: number) => Math.round(v / MODULE) * MODULE
 
 interface PieceProps {
   k: string; label: string; ctx: HudCtx; pos?: Placement; arrange: boolean; edit?: Edit; live?: boolean
@@ -74,20 +79,28 @@ function Piece({ k, label, ctx, pos, arrange, edit, live, look, dim, ghost, onMo
     const vr = view.getBoundingClientRect(), r = el.getBoundingClientRect()
     const dx = e.clientX - r.left, dy = e.clientY - r.top, x0 = e.clientX, y0 = e.clientY
     const panel = edit ? document.querySelector<HTMLElement>('.pd') : null
+    const cs = getComputedStyle(view)
+    const padL = parseFloat(cs.getPropertyValue('--pad-l')) || MODULE, padT = parseFloat(cs.getPropertyValue('--pad-t')) || MODULE
     let moved = false, out = false
     const move = (ev: PointerEvent) => {
       if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return
       moved = true
       el.classList.add('hud-piece--dragging')
+      view.classList.add('hud-layer--dragging')
       const pr = panel?.getBoundingClientRect()
       out = !!pr && ev.clientX >= pr.left && ev.clientX <= pr.right && ev.clientY >= pr.top && ev.clientY <= pr.bottom
       panel?.classList.toggle('pd--drop', out)
       el.classList.toggle('hud-piece--out', out)
-      const x = Math.max(0, Math.min(vr.width - r.width, ev.clientX - vr.left - dx)) / vr.width
-      const y = Math.max(0, Math.min(vr.height - r.height, ev.clientY - vr.top - dy)) / vr.height
+      // the top-left lands on the module grid, counted in the layer's own pixels (Alt: free)
+      const z = vr.width / (view.offsetWidth || vr.width)
+      const fx = (ev.clientX - vr.left - dx) / z, fy = (ev.clientY - vr.top - dy) / z
+      // the grid starts at the frame's padding
+      const x = Math.max(0, Math.min(vr.width - r.width, (ev.altKey ? fx : snap(fx - padL) + padL) * z)) / vr.width
+      const y = Math.max(0, Math.min(vr.height - r.height, (ev.altKey ? fy : snap(fy - padT) + padT) * z)) / vr.height
       onMove(k, { x, y })
     }
     const up = () => {
+      view.classList.remove('hud-layer--dragging')
       el.classList.remove('hud-piece--dragging', 'hud-piece--out')
       panel?.classList.remove('pd--drop')
       window.removeEventListener('pointermove', move)
@@ -110,17 +123,23 @@ function Piece({ k, label, ctx, pos, arrange, edit, live, look, dim, ghost, onMo
     const s0 = look?.size ?? 1, auto = (pos?.z ?? 1) * (pos && (!pos.auto || pos.anchor) ? fit : 1)
     const pct = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('.hud-piece__pct')
     let size = s0
+    const layer = el.closest<HTMLElement>('.hud-layer')
+    layer?.classList.add('hud-layer--dragging')
+    const lk = layer ? layer.getBoundingClientRect().width / (layer.offsetWidth || 1) : 1
     const move = (ev: PointerEvent) => {
-      // the diagonal: the larger of the two stretches, so the corner follows the pointer
+      // the diagonal: the larger of the two stretches, so the corner follows the pointer; the width
+      // comes out in whole modules (Alt: free)
       const f = Math.max((r.width + ev.clientX - x0) / r.width, (r.height + ev.clientY - y0) / r.height)
-      size = Math.min(SIZE_MAX, Math.max(SIZE_MIN, s0 * f))
+      const w = ev.altKey ? r.width * f : Math.max(MODULE, snap((r.width * f) / lk)) * lk
+      size = Math.min(SIZE_MAX, Math.max(SIZE_MIN, (s0 * w) / r.width))
       el.style.zoom = String(size * auto)
       if (pct) pct.textContent = `${Math.round(size * 100)}%`
     }
     const up = () => {
+      layer?.classList.remove('hud-layer--dragging')
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
-      edit.onResize?.(k, Math.round(size * 100) / 100)
+      edit.onResize?.(k, Math.round(size * 1000) / 1000)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -135,11 +154,9 @@ function Piece({ k, label, ctx, pos, arrange, edit, live, look, dim, ghost, onMo
       {(arrange || edit) && (
         <div className="hud-piece__bar" data-qs-probe-ui>
           <button className="hud-piece__handle" onPointerDown={start} onDoubleClick={() => onMove?.(k, null)}
-            data-tip={`Drag ${label}`} data-tip-desc={edit ? 'Drag it anywhere, or onto the compose panel to take it off. Double-click to send it back to its usual place.' : 'Drag to place it. Double-click to send it back.'}>
-            <span className="hud-piece__grip" />{label}
+            data-tip={label} data-tip-desc={edit ? 'Drag it anywhere, or onto the compose panel to take it off. Double-click to send it back to its usual place.' : 'Drag to place it. Double-click to send it back.'}>
+            <span className="hud-piece__grip" />
           </button>
-          {edit && <button className="hud-piece__btn" onClick={() => body.current && savePng(body.current, label)}
-            data-tip="Save as PNG" data-tip-desc="This piece alone, transparent, at 3×, to place over anything.">PNG</button>}
           {edit && <button className="hud-piece__btn hud-piece__btn--x" onClick={() => edit.onRemove(k)} aria-label={`Remove ${label}`}
             data-tip="Remove" data-tip-key="⌫">×</button>}
         </div>
@@ -222,8 +239,13 @@ function padOf(chosen: HudModule[]): Pad {
 }
 
 /** Draws the chosen modules over the view. `chrome` lets the host put its own controls into slots. */
-export function HudLayer({ ctx, compose, chrome, positions = {}, fit = 1, terse = false, arrange = false, edit, looks = {}, hl = null, ghost = null, texts = [], autoArrange = false, onCrowded, onLeftOut, tidyKey = 0, reserve = 0, inset, onHero, onMove, onText }: {
+export function HudLayer({ ctx: view, scale = 1, pad, compose, chrome, positions = {}, fit = 1, terse = false, arrange = false, edit, looks = {}, hl = null, ghost = null, texts = [], autoArrange = false, onCrowded, onLeftOut, tidyKey = 0, reserve = 0, inset, onHero, onMove, onText }: {
   ctx: HudCtx; compose: Composition; chrome?: Partial<Record<(typeof SLOTS)[number], ReactNode>>
+  /** The HUD drawn at 1/scale of the view's pixels and scaled to fit it, so it keeps its proportion to a
+   *  frame of any size on screen. */
+  scale?: number
+  /** Room kept clear inside each edge, in the layer's pixels: the slots and the grid start there. */
+  pad?: { t: number; r: number; b: number; l: number }
   /** Scale of pieces placed by hand (see Piece). */
   fit?: number
   /** Data only: captions and notes inside the pieces are hidden. */
@@ -248,6 +270,15 @@ export function HudLayer({ ctx, compose, chrome, positions = {}, fit = 1, terse 
   texts?: { id: string; text: string }[]
   onMove?: (k: string, p: Placement | null) => void; onText?: (id: string, t: string | null) => void
 }) {
+  // the pieces see the layer's own pixels: the view's divided by the scale
+  const project = view.project
+  const sp = useMemo(() => (scale === 1 ? project : (p: Parameters<HudCtx['project']>[0]) => { const q = project(p); return q && [q[0] / scale, q[1] / scale] as [number, number] }), [project, scale])
+  const ctx: HudCtx = scale === 1 ? view : {
+    ...view, w: view.w / scale, h: view.h / scale, project: sp,
+    rect: view.rect && { l: view.rect.l / scale, r: view.rect.r / scale, t: view.rect.t / scale, b: view.rect.b / scale },
+    hover: view.hover && { ...view.hover, x: view.hover.x / scale, y: view.hover.y / scale },
+    pins: view.pins.map((q) => ({ ...q, x: q.x == null ? null : q.x / scale, y: q.y == null ? null : q.y / scale })),
+  }
   const key = keyOf
   const chosen = chosenOf(compose).filter((m) => !looks[key(m)]?.hidden)
   const free = chosen.filter((m) => m.slot === 'object' || m.slot === 'full')
@@ -255,7 +286,7 @@ export function HudLayer({ ctx, compose, chrome, positions = {}, fit = 1, terse 
   const slotted = (s: string) => chosen.filter((m) => m.slot === s && !positions[key(m)])
   const dim = (k: string) => !!hl && hl !== k
   const piece = (m: HudModule, pos?: Placement) => (
-    <Piece key={key(m)} k={key(m)} label={m.label} ctx={ctx} pos={pos} arrange={arrange} edit={edit} onMove={onMove} live={m.interactive} look={looks[key(m)]} dim={dim(key(m))} ghost={ghost === key(m)} fit={fit}><Moving k={key(m)} ctx={ctx} render={m.render} /></Piece>
+    <Piece key={key(m)} k={key(m)} label={`${FAMILIES.find((f) => f.id === m.family)?.title ?? m.family} · ${m.label}`} ctx={ctx} pos={pos} arrange={arrange} edit={edit} onMove={onMove} live={m.interactive} look={looks[key(m)]} dim={dim(key(m))} ghost={ghost === key(m)} fit={fit}><Moving k={key(m)} ctx={ctx} render={m.render} /></Piece>
   )
   const chromeAt = (s: (typeof SLOTS)[number]) => (chrome?.[s] && !positions[`chrome:${s}`] ? (
     <Piece k={`chrome:${s}`} label="controls" ctx={ctx} arrange={arrange} onMove={onMove} live>{chrome[s]}</Piece>
@@ -268,8 +299,11 @@ export function HudLayer({ ctx, compose, chrome, positions = {}, fit = 1, terse 
     + '|' + Object.entries(positions).filter(([, v]) => v.anchor).map(([k, v]) => `${k}${v.x.toFixed(3)},${v.y.toFixed(3)}`).join() + '|' + fit.toFixed(2)
   const settledSig = useRef('')
   const tidied = useRef(tidyKey)
+  // the strips shrink to fit between the corners only when what is in them or the view's size changes,
+  // not on every frame the camera moves (measuring forces a layout)
+  const stripKey = `${sig}|${Math.round(ctx.w)}x${Math.round(ctx.h)}|${Object.values(looks).map((l) => l.size ?? 1).join()}`
+  useLayoutEffect(() => { fitStrips(root.current) }, [stripKey])
   useLayoutEffect(() => {
-    fitStrips(root.current)
     const all = tidyKey !== tidied.current
     if (!onMove || !root.current || (!all && (!autoArrange || sig === settledSig.current))) return
     tidied.current = tidyKey
@@ -290,7 +324,7 @@ export function HudLayer({ ctx, compose, chrome, positions = {}, fit = 1, terse 
         const { hero, out } = composeLayout(el, onMove, slotOf, (k) => looks[k]?.size ?? 1, reserve, padOf(chosen), inset)
         onHero?.(hero)
         onLeftOut?.(out)
-        setTimeout(() => { if (root.current) onCrowded?.(settle(root.current, ctx.rect, onMove, () => true, (k) => positions[k]?.z ?? 1, ghost).stuck) }, 160)
+        setTimeout(() => { if (root.current) onCrowded?.(settle(root.current, view.rect, onMove, () => true, (k) => positions[k]?.z ?? 1, ghost).stuck) }, 160)
       }
       requestAnimationFrame(() => requestAnimationFrame(go))
       return
@@ -299,15 +333,24 @@ export function HudLayer({ ctx, compose, chrome, positions = {}, fit = 1, terse 
     let pass = 0
     const run = () => {
       if (!root.current) return
-      const { moved, stuck } = settle(root.current, ctx.rect, onMove, fixed, (k) => (positions[k]?.z ?? 1) * (positions[k]?.anchor ? fit : 1), ghost, (k) => !!positions[k]?.anchor)
+      const { moved, stuck } = settle(root.current, view.rect, onMove, fixed, (k) => (positions[k]?.z ?? 1) * (positions[k]?.anchor ? fit : 1), ghost, (k) => !!positions[k]?.anchor)
       if (moved && ++pass < 4) setTimeout(run, 60)
       else onCrowded?.(stuck)
     }
     run()
   })
   return (
-    <div ref={root} className={'hud-layer' + (arrange ? ' hud-layer--arrange' : '') + (edit ? ' hud-layer--edit' : '') + (terse ? ' hud-layer--terse' : '')}>
-      {free.map((m) => <Free key={key(m)} k={key(m)} live={m.interactive} look={looks[key(m)]} dim={dim(key(m))} ghost={ghost === key(m)}>{m.render(ctx)}</Free>)}
+    <div ref={root} className={'hud-layer' + (arrange ? ' hud-layer--arrange' : '') + (edit ? ' hud-layer--edit' : '') + (terse ? ' hud-layer--terse' : '')}
+      style={{
+        ...(scale === 1 ? null : { right: 'auto', bottom: 'auto', width: ctx.w, height: ctx.h, transform: `scale(${scale})`, transformOrigin: '0 0' }),
+        ...(pad ? { ['--pad-t' as string]: `${pad.t}px`, ['--pad-r' as string]: `${pad.r}px`, ['--pad-b' as string]: `${pad.b}px`, ['--pad-l' as string]: `${pad.l}px` } : null),
+      }}>
+      {(edit || arrange) && <div className="hud-grid" data-no-export aria-hidden />}
+      {free.map((m) => (
+        <Free key={key(m)} k={key(m)} live={m.interactive} look={looks[key(m)]} dim={dim(key(m))} ghost={ghost === key(m)}>
+          <MarkScale.Provider value={looks[key(m)]?.size ?? 1}><Moving k={key(m)} ctx={ctx} render={m.render} /></MarkScale.Provider>
+        </Free>
+      ))}
       {SLOTS.map((s) => {
         const mods = slotted(s)
         const c = chromeAt(s)

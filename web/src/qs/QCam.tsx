@@ -16,6 +16,10 @@ export interface QCamProps {
   home?: Camera
   /** Hide the readout and the station pills. */
   bare?: boolean
+  /** Hairlines instead of satin metal: no shadow, no bevel, a flat node; for marks over the view. */
+  flat?: boolean
+  /** Show the scales and angles as if the hand were on it (the camera is moving on its own). */
+  active?: boolean
 }
 
 const INK = 'var(--qs-ink)'
@@ -124,7 +128,7 @@ interface Snap {
 }
 
 /** QCam, the orbit gimbal (188 × 150) with an optional Camera readout and station pills. Controlled. */
-export function QCam({ value, onChange, home = QCAM_HOME, bare = false }: QCamProps) {
+export function QCam({ value, onChange, home = QCAM_HOME, bare = false, flat = false, active = false }: QCamProps) {
   const uid = useId().replace(/:/g, '')
   const gM = `qc-m-${uid}`
   const gB = `qc-b-${uid}`
@@ -169,7 +173,7 @@ export function QCam({ value, onChange, home = QCAM_HOME, bare = false }: QCamPr
 
   const { az, el, dist } = value
   const dragging = drag != null
-  const hov = dragging || hover
+  const hov = dragging || hover || active
 
   // Geometry that follows the camera.
   const aS = az > 180 ? az - 360 : az
@@ -286,6 +290,27 @@ export function QCam({ value, onChange, home = QCAM_HOME, bare = false }: QCamPr
             <stop offset="1" stopColor="#14161C" stopOpacity="0" />
           </radialGradient>
         </defs>
+        {flat ? (
+          <>
+            <path d={RING_B} fill="none" stroke={INK4} strokeWidth=".75" strokeDasharray="2 3" />
+            {TICKS.filter((_, i) => i % 2 === 0).map((t, i) => (
+              <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke={t.c === INK ? INK3 : INK4} strokeWidth=".75" />
+            ))}
+            <path d={CUBE} fill="none" stroke={INK4} strokeWidth=".75" />
+            {azArc && <path d={azArc} fill="none" stroke={INK} strokeWidth="1" />}
+            {ghost?.trail && <path d={ghost.trail} fill="none" stroke={INK3} strokeWidth=".75" strokeDasharray="2 3" />}
+            <path d={yoke} fill="none" stroke={INK4} strokeWidth=".75" />
+            {elArc && <path d={elArc} fill="none" stroke={INK} strokeWidth="1" />}
+            {et.map((t, i) => (
+              <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke={INK3} strokeWidth=".75" />
+            ))}
+            <line x1={n1(B[0])} y1={n1(B[1])} x2={n1(C_PT[0])} y2={n1(C_PT[1])} stroke={INK3} strokeWidth=".75" strokeDasharray="1 2.5" />
+            <path d={RING_F} fill="none" stroke={INK2} strokeWidth=".75" />
+            <circle cx={n1(B[0])} cy={n1(B[1])} r="7" fill="none" stroke={INK3} strokeWidth=".75" strokeDasharray="2 2" opacity={hov ? 1 : 0} />
+            <circle cx={n1(B[0])} cy={n1(B[1])} r={dragging ? 3.5 : 2.75} fill={INK} />
+          </>
+        ) : (
+          <>
         <ellipse cx="94" cy="100" rx="80" ry="27" fill={`url(#${gS})`} />
         <path d={RING_B} fill="none" stroke={EDGE} strokeWidth="7.2" />
         <path d={RING_B} fill="none" stroke={`url(#${gM})`} strokeWidth="6" />
@@ -324,6 +349,8 @@ export function QCam({ value, onChange, home = QCAM_HOME, bare = false }: QCamPr
           opacity={hov ? 1 : 0}
         />
         <circle cx={n1(B[0])} cy={n1(B[1])} r={dragging ? 7.5 : 6.5} fill={`url(#${gB})`} stroke="rgba(20,22,28,.4)" strokeWidth=".75" />
+          </>
+        )}
       </svg>
       {hov &&
         RING_LABELS.map((l) => (
@@ -350,7 +377,7 @@ export function QCam({ value, onChange, home = QCAM_HOME, bare = false }: QCamPr
     <div style={{ display: 'flex', alignItems: 'flex-end', gap: 20, color: INK }}>
       {gimbal}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 22 }}>
-        <CamReadout rows={rows} />
+        <CamReadout rows={rows} title={!flat} />
         <div style={{ display: 'flex', gap: 4 }}>
           {QCAM_STATIONS.map((s, i) => {
             const on = Math.abs(dArc(s.az, az)) < 1 && Math.abs(el - s.el) < 1
@@ -365,13 +392,13 @@ export function QCam({ value, onChange, home = QCAM_HOME, bare = false }: QCamPr
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  height: 20,
+                  height: flat ? 18 : 20,
                   padding: '0 8px',
                   margin: 0,
                   borderRadius: 999,
-                  border: `1px solid ${on || hot ? INK : CTL}`,
+                  border: `${flat ? 0.75 : 1}px solid ${on || hot ? INK : flat ? INK4 : CTL}`,
                   background: on ? SEL : 'transparent',
-                  color: on || hot ? INK : INK2,
+                  color: on || hot ? INK : flat ? INK3 : INK2,
                   font: `400 10px/1 ${MONO}`,
                   cursor: 'pointer',
                   boxSizing: 'border-box',
@@ -389,10 +416,10 @@ export function QCam({ value, onChange, home = QCAM_HOME, bare = false }: QCamPr
 }
 
 /** QReadout, grid form: title "Camera", kw 44, w 150. */
-function CamReadout({ rows }: { rows: [string, string, string][] }) {
+function CamReadout({ rows, title = true }: { rows: [string, string, string][]; title?: boolean }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 150 }}>
-      <span style={{ font: '600 11.5px/1 var(--qs-sans)', color: INK }}>Camera</span>
+      {title && <span style={{ font: '600 11.5px/1 var(--qs-sans)', color: INK }}>Camera</span>}
       <div
         style={{
           display: 'grid',

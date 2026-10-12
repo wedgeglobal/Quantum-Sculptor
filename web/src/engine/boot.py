@@ -13,6 +13,8 @@ import time
 os.environ["QUANTUM_SCULPTING_HOME"] = "/home/pyodide/qs"
 if ATLAS_RELAY:
     os.environ["ATLAS_API_BASE"] = ATLAS_RELAY
+if SHIPPED_URL:
+    os.environ["QS_SHIPPED_URL"] = SHIPPED_URL     # where the sample shapes' results are published
 
 try:
     import pyodide_http

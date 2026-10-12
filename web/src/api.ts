@@ -87,6 +87,8 @@ export interface JobView {
 }
 
 export interface MeshReport {
+  /** Voxel steps left out because they would have erased the shape (walls thinner than the step). */
+  skipped?: ('smooth' | 'close' | 'grow')[]
   extents: [number, number, number]
   watertight: boolean
   faces: number
@@ -279,7 +281,14 @@ export const api = {
   clearKey: async () => (await request('/api/key', { method: 'DELETE' })).json() as Promise<KeyStatus>,
   testKey: () => postJSON<{ ok: true }>('/api/key/test'),
   /** Write a composition into the repo as the Default (web/src/hud/defaultComposition.json); returns its new rev. */
-  publishDefault: (c: unknown) => postJSON<{ rev: number; file: string }>('/api/default-composition', c),
+  // publishing writes into the repository, which only the service on this computer can do: developing
+  // with the in-browser engine, it still goes to that service (the dev server runs it and proxies /api)
+  publishDefault: async (c: unknown) => {
+    if (!IN_BROWSER || !import.meta.env.DEV) return postJSON<{ rev: number; file: string }>('/api/default-composition', c)
+    const res = await fetch('/api/default-composition', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Client': CLIENT }, body: JSON.stringify(c) })
+    if (!res.ok) throw new ApiError(res.status, (await res.json().catch(() => ({ error: res.statusText }))).error ?? 'Not published')
+    return res.json() as Promise<{ rev: number; file: string }>
+  },
 
   models: () => getJSON<{ name: string; mb: number }[]>('/api/models'),
   testCup: () => postJSON<ModelInfo>('/api/model/test-cup'),

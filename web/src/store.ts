@@ -79,7 +79,7 @@ export interface Hud {
   nav: boolean         // navigation buttons under the gizmo
   tools: boolean       // tool shelf
 }
-export const HUD_DEFAULT: Hud = { bounds: true, floor: true, slice: true, probe: true, axes: false, dims: false, camera: true, frame: false, legend: false, caption: false, nav: false, tools: true }
+export const HUD_DEFAULT: Hud = { bounds: true, floor: true, slice: true, probe: true, axes: false, dims: false, camera: true, frame: false, legend: false, caption: false, nav: false, tools: false }
 
 export type Tool = 'navigate' | 'probe' | 'annotate' | 'measure' | 'slice'
 export type Shading = 'wire' | 'solid' | 'value' | 'entangle'
@@ -110,6 +110,9 @@ export const EVOLVE_EMPTY: Evolve = { turn: 0, turns: 0, playing: false, owner: 
 /** The service evolves nations on grids up to this size (server.NATIONS_MAX_GRID). */
 export const NATIONS_MAX_GRID = 128
 /** Playback speed of the turns. */
+/** Engine names as the log says them. */
+const MODE_NAME: Record<string, string> = { gaussian: 'Gauss', emulator: 'Emulate', atlas: 'Atlas', nations: 'Evolve' }
+
 export const TURNS_PER_SECOND = 6
 /** How Evolve moves between turns: snap, or morph over a short or long tween. */
 export type Morph = 'off' | 'short' | 'long'
@@ -130,7 +133,7 @@ export interface S {
   tool: Tool
   setTool: (t: Tool) => void
   shading: Shading
-  shade: { tables: string; thickness: number; mix: number; light: 'studio' | 'soft' | 'flat' | 'rim'; backdrop: 'plain' | 'dots' | 'lines' | 'gradient' | 'studio' }
+  shade: { tables: string; thickness: number; mix: number; light: 'studio' | 'soft' | 'flat' | 'rim'; backdrop: 'plain' | 'dots' | 'lines' | 'gradient' | 'studio'; /** meshes shaded face by face instead of smooth */ facets: boolean }
   setShading: (s: Shading, opts?: Partial<S['shade']>) => void
   /** Ghost layers drawn with the main view, and which layers the probe reads. */
   layers: Record<Layer, LayerState>
@@ -144,8 +147,6 @@ export interface S {
   theme: 'light' | 'dark'
   setTheme: (t: 'system' | 'light' | 'dark') => void
   setHud: (p: Partial<Hud>) => void
-  scan: { z: number; playing: boolean }
-  setScan: (p: Partial<S['scan']>) => void
   busy: Busy
   error: string | null
   log: LogLine[]
@@ -222,8 +223,8 @@ export interface S {
   setEvolveSel: (i: number | null) => void
   /** Show turn t (clamped); frames are fetched once and kept in memory. */
   setTurn: (t: number) => Promise<void>
-  /** Play the turns at TURNS_PER_SECOND from here (from 0 when at the end). */
-  play: () => void
+  /** Play the turns at `tps` a second (Animate's turns per second) from here (from 0 when at the end). */
+  play: (tps?: number) => void
   pause: () => void
   /** Evolve's morph between turns (per viewer, remembered). */
   morph: Morph
@@ -405,7 +406,7 @@ export const useStore = create<S>()((set, get) => {
             set({ procData: grid })
             // layer-tiled runs: the scan plane follows the real progress
             if (meta.frontier != null) {
-              set({ scan: { z: meta.frontier, playing: false }, slice: { axis: 'z', index: Math.max(0, meta.frontier - 1) } })
+              set({ slice: { axis: 'z', index: Math.max(0, meta.frontier - 1) } })
               if (get().focus.stage !== 'scan') get().setFocus('scan', `Atlas run ${job.run} · layer by layer`)
             }
           } catch { /* preview not ready */ }
@@ -482,7 +483,12 @@ export const useStore = create<S>()((set, get) => {
     slice: { axis: 'z', index: 16 },
     showSlice: false,
     hud: (() => {
-      try { return { ...HUD_DEFAULT, ...JSON.parse(localStorage.getItem('qs-hud') ?? '{}') } } catch { return HUD_DEFAULT }
+      try {
+        const kept = JSON.parse(localStorage.getItem('qs-hud') ?? '{}')
+        // the tool shelf and navigation start off now; a browser that kept them on from before takes that once
+        if (!localStorage.getItem('qs-hud-2')) { localStorage.setItem('qs-hud-2', '1'); delete kept.tools; delete kept.nav }
+        return { ...HUD_DEFAULT, ...kept }
+      } catch { return HUD_DEFAULT }
     })(),
     setHud: (p) => set((s) => {
       const hud = { ...s.hud, ...p }
@@ -502,7 +508,7 @@ export const useStore = create<S>()((set, get) => {
     setTool: (t) => set({ tool: t }),
     shading: 'value',
     shade: (() => {
-      const d = { tables: 'cubic', thickness: 0.9, mix: 1, light: 'studio' as const, backdrop: 'plain' as const }
+      const d = { tables: 'cubic', thickness: 0.9, mix: 1, light: 'studio' as const, backdrop: 'plain' as const, facets: false }
       try { return { ...d, ...JSON.parse(localStorage.getItem('qs-shade') ?? '{}') } } catch { return d }
     })(),
     setShading: (sh, opts) => set((s) => {
@@ -522,8 +528,6 @@ export const useStore = create<S>()((set, get) => {
       try { localStorage.setItem('qs-compose', JSON.stringify(compose)) } catch { /* per-viewer */ }
       return { compose }
     }),
-    scan: { z: 0, playing: false },
-    setScan: (p) => set((s) => ({ scan: { ...s.scan, ...p } })),
     busy: {},
     error: null,
     log: [],
@@ -548,7 +552,7 @@ export const useStore = create<S>()((set, get) => {
     atlasJobs: [],
 
     m: {
-      method: 'threshold', level: 0.5, keep: 'largest', smooth: 5, height: 90, refine: 1, amount: 2,
+      method: 'threshold', level: 0.5, keep: 'largest', smooth: 8, height: 90, refine: 1, amount: 2,
       field: 'threshold' as Field, vfilter: 'none' as VFilter, vwidth: 1, grow: 0, close: 0,
     },
     report: null,
@@ -767,7 +771,7 @@ export const useStore = create<S>()((set, get) => {
         // following a new model: Evolve stops on its history (that is the result to look at); other modes go on to the mesh
         if (get().focus.follow) get().setFocus(evolved ? 'evolve' : 'quantum', evolved ? `Evolved ${pp.k} nations` : `${mt.mode === 'emulator' ? 'Emulation' : mt.mode} done`, !evolved)
         if (get().step < 2) set({ step: 2 })
-        if (res.meta.cached) get().pushLog(`Atlas result for ${res.meta.run} read from cache`)
+        if (res.meta.cached) get().pushLog(`${MODE_NAME[res.meta.mode] ?? res.meta.mode} result for ${res.meta.run} read from cache`)
         set((s) => ({ stale: { ...s.stale, proc: false } }))
         if (get().auto) debounce('mesh', 150, () => get().buildMesh())
         else set((s) => ({ stale: { ...s.stale, mesh: !!s.resultMesh } }))
@@ -795,7 +799,7 @@ export const useStore = create<S>()((set, get) => {
         else fail(e)
       }
     },
-    play: () => {
+    play: (tps = TURNS_PER_SECOND) => {
       const ev = get().evolve
       if (!ev.history || ev.turns < 1) return
       stopPlayer()
@@ -809,7 +813,7 @@ export const useStore = create<S>()((set, get) => {
         if (e.turn >= e.turns) { get().pause(); return }
         get().setTurn(e.turn + 1)
         for (let k = 2; k <= 4 && e.turn + k <= e.turns; k++) frame(e.turn + k).catch(() => { /* reported when shown */ })
-      }, 1000 / TURNS_PER_SECOND)
+      }, 1000 / Math.max(0.5, tps))
     },
     pause: () => {
       stopPlayer()

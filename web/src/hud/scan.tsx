@@ -52,15 +52,15 @@ export function Sweep({ ctx }: { ctx: HudCtx }) {
 
 // ---------------------------------------------------------------- v2 plane + index
 
-const W = 260
-const H = 156
+const W = 232
+const H = 150
 const KX = 0.433
 const KY = 0.25
-const OX = 34
-const OY = 132
-const U32 = 2.9
+const SX = 196 // the scale's x
+const S0 = H - 14, S1 = 14 // the scale's bottom and top
 
-/** The QSlice cabinet cube with its plane and index tab, driven by ctx.slice / ctx.n. Drag to move. */
+/** The grid as a hairline cube with the cutting plane in it, and a straight scale beside it with the
+ *  layer's number. Drag up or down anywhere on it to move the plane; hover previews a layer. */
 export function PlaneIndex({ ctx }: { ctx: HudCtx }) {
   const N = Math.max(1, ctx.n)
   const ax: Axis = ctx.slice.axis
@@ -68,11 +68,12 @@ export function PlaneIndex({ ctx }: { ctx: HudCtx }) {
   const [hover, setHover] = useState<number | null>(null)
   const [drag, setDrag] = useState<number | null>(null)
 
-  const u = (U32 * 32) / N
+  const u = Math.min(150 / (N * (1 + KX)), (H - 24) / (N * (1 + KY)))
+  const OX = 12, OY = H - 12
   const P = (i: number, j: number, z: number): V2 => [OX + u * (i + j * KX), OY - u * (z + j * KY)]
   const p3 = (a: number, b: number, L: number): V2 => (ax === 'z' ? P(a, b, L) : ax === 'x' ? P(L, a, b) : P(a, L, b))
-  const quad = (L: number) =>
-    'M' + ([[0, 0], [N, 0], [N, N], [0, N]] as V2[]).map(([a, b]) => p3(a, b, L).map(n1).join(' ')).join('L') + 'Z'
+  const corners = (L: number) => ([[0, 0], [N, 0], [N, N], [0, N]] as V2[]).map(([a, b]) => p3(a, b, L))
+  const quad = (L: number) => 'M' + corners(L).map((q) => q.map(n1).join(' ')).join('L') + 'Z'
 
   let hid = ''
   let vis = ''
@@ -85,50 +86,27 @@ export function PlaneIndex({ ctx }: { ctx: HudCtx }) {
       if (A.filter((x, t) => x !== B[t]).length !== 1) continue
       const pa = P(...A)
       const pb = P(...B)
-      const s = `M${n1(pa[0])} ${n1(pa[1])}L${n1(pb[0])} ${n1(pb[1])}`
-      if ([A, B].some((q) => q[0] === 0 && q[1] === N && q[2] === 0)) hid += s
-      else vis += s
+      const seg = `M${n1(pa[0])} ${n1(pa[1])}L${n1(pb[0])} ${n1(pb[1])}`
+      if ([A, B].some((q) => q[0] === 0 && q[1] === N && q[2] === 0)) hid += seg
+      else vis += seg
     }
 
-  const RB: (t: number) => V3 = ax === 'z' ? (t) => [N, N, t] : ax === 'x' ? (t) => [t, 0, 0] : (t) => [N, t, 0]
-  const OF: V2 = ax === 'z' ? [14, 0] : ax === 'x' ? [0, 14] : [12, 7]
-  const TD: V2 = ax === 'z' ? [1, 0] : ax === 'x' ? [0, 1] : [0.5, 0.87]
-  const Rr = (t: number): V2 => {
-    const q = P(...RB(t))
-    return [q[0] + OF[0], q[1] + OF[1]]
-  }
-  const r0 = Rr(0)
-  const r1 = Rr(N)
+  const yOf = (i: number) => S0 - ((i + 0.5) / N) * (S0 - S1)
   let ticks = ''
   let major = ''
   for (let i = 0; i <= 16; i++) {
-    const q = Rr((i * N) / 16)
-    const mj = i % 4 === 0
-    const L = mj ? 6 : 3
-    const s = `M${n1(q[0])} ${n1(q[1])}L${n1(q[0] + TD[0] * L)} ${n1(q[1] + TD[1] * L)}`
-    if (mj) major += s
-    else ticks += s
+    const y = n1(S0 - (i / 16) * (S0 - S1))
+    if (i % 4 === 0) major += `M${SX - 4} ${y}H${SX + 4}`
+    else ticks += `M${SX - 2} ${y}H${SX + 2}`
   }
-  const tab = (c: number): V2 => {
-    const q = Rr(c + 0.5)
-    return [q[0] + TD[0] * 9, q[1] + TD[1] * 9]
-  }
-  const A0 = P(...RB(k + 0.5))
-  const T0 = Rr(k + 0.5)
-  const TT = tab(k)
+  // the leader: from the plane's right-most corner to its layer on the scale
+  const edge = corners(k + 0.5).reduce((m, q) => (q[0] > m[0] ? q : m))
   const ghost = hover != null && hover !== k ? hover : null
-  const GT = ghost != null ? tab(ghost) : null
-  const ttr = ax === 'z' ? 'translate(0,-50%)' : ax === 'x' ? 'translate(-50%,0)' : 'translate(0,-20%)'
-  const ends = [0, N - 1].filter((t) => Math.abs(t - k) > (2 * N) / 32)
 
   const toIdx = (e: RPointerEvent<HTMLDivElement>) => {
     const rc = e.currentTarget.getBoundingClientRect()
-    const sc = W / (rc.width || W)
-    const mx = (e.clientX - rc.left) * sc
-    const my = (e.clientY - rc.top) * sc
-    const dx = r1[0] - r0[0]
-    const dy = r1[1] - r0[1]
-    return clamp(Math.round((((mx - r0[0]) * dx + (my - r0[1]) * dy) / (dx * dx + dy * dy)) * N - 0.5), 0, N - 1)
+    const my = (e.clientY - rc.top) * (H / (rc.height || H))
+    return clamp(Math.round(((S0 - my) / (S0 - S1)) * N - 0.5), 0, N - 1)
   }
   const down = (e: RPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
@@ -150,6 +128,7 @@ export function PlaneIndex({ ctx }: { ctx: HudCtx }) {
   }
 
   const held = drag != null
+  const hair = { fill: 'none', strokeWidth: 0.75 } as const
   return (
     <div
       className="qs-lab-hit"
@@ -158,44 +137,36 @@ export function PlaneIndex({ ctx }: { ctx: HudCtx }) {
       onPointerUp={up}
       onPointerCancel={up}
       onPointerLeave={() => !held && setHover(null)}
-      data-tip="Slice plane"
-      data-tip-desc="Drag to move the plane; hover previews a layer"
+      data-tip="Cutting plane"
+      data-tip-desc="Drag up or down to move the plane; hover previews a layer"
       style={{ position: 'relative', width: W, height: H, cursor: held ? 'grabbing' : 'ns-resize', userSelect: 'none', touchAction: 'none' }}
     >
       <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible' }} aria-hidden>
-        <path d={hid} style={{ fill: 'none', stroke: 'var(--qs-ink4)', strokeWidth: 1, strokeDasharray: '2 3' }} />
-        {ghost != null && <path d={quad(ghost + 0.5)} style={{ fill: 'none', stroke: 'var(--qs-ink2)', strokeWidth: 1, strokeDasharray: '3 3' }} />}
-        <path d={quad(k + 0.5)} style={{ fill: held ? 'var(--qs-line)' : 'var(--qs-faint)', stroke: 'var(--qs-ink)', strokeWidth: 1 }} />
-        <path d={vis} style={{ fill: 'none', stroke: 'var(--qs-ink3)', strokeWidth: 1 }} />
-        <path d={`M${n1(A0[0])} ${n1(A0[1])}L${n1(T0[0])} ${n1(T0[1])}`} style={{ fill: 'none', stroke: 'var(--qs-ink)', strokeWidth: 1 }} />
-        <path d={`M${n1(r0[0])} ${n1(r0[1])}L${n1(r1[0])} ${n1(r1[1])}`} style={{ fill: 'none', stroke: 'var(--qs-ink3)', strokeWidth: 1 }} />
-        <path d={ticks} style={{ fill: 'none', stroke: 'var(--qs-ink4)', strokeWidth: 1 }} />
-        <path d={major} style={{ fill: 'none', stroke: 'var(--qs-ink3)', strokeWidth: 1 }} />
+        <path d={hid} style={{ ...hair, stroke: 'var(--qs-ink4)', strokeDasharray: '2 3' }} />
+        {ghost != null && <path d={quad(ghost + 0.5)} style={{ ...hair, stroke: 'var(--qs-ink3)', strokeDasharray: '2 2' }} />}
+        <path d={quad(k + 0.5)} style={{ fill: held ? 'var(--qs-line)' : 'var(--qs-faint)', stroke: 'var(--qs-ink)', strokeWidth: 1, transition: 'd 200ms var(--qs-ease)' }} />
+        <path d={vis} style={{ ...hair, stroke: 'var(--qs-ink3)' }} />
+        <path d={`M${n1(edge[0])} ${n1(edge[1])}L${SX - 8} ${n1(yOf(k))}`} style={{ ...hair, stroke: 'var(--qs-ink3)', strokeDasharray: '1 2.5' }} />
+        <path d={`M${SX} ${S1}V${S0}`} style={{ ...hair, stroke: 'var(--qs-ink4)' }} />
+        <path d={ticks} style={{ ...hair, stroke: 'var(--qs-ink4)' }} />
+        <path d={major} style={{ ...hair, stroke: 'var(--qs-ink3)' }} />
+        {ghost != null && <path d={`M${SX - 6} ${n1(yOf(ghost))}H${SX + 6}`} style={{ ...hair, stroke: 'var(--qs-ink3)' }} />}
+        <path d={`M${SX - 8} ${n1(yOf(k))}H${SX + 8}`} style={{ fill: 'none', stroke: 'var(--qs-ink)', strokeWidth: 1.5, transition: 'd 200ms var(--qs-ease)' }} />
       </svg>
-      {ends.map((t) => {
-        const q = Rr(t + 0.5)
-        const pos = ax === 'x' ? { left: q[0], top: q[1] + 9, transform: 'translate(-50%,0)' } : { left: q[0] + TD[0] * 10, top: q[1] + TD[1] * 10, transform: 'translate(0,-50%)' }
-        return (
-          <span key={t} className="qs-lab-small" style={{ position: 'absolute', ...pos, fontSize: 11, color: 'var(--qs-ink3)', pointerEvents: 'none' }}>
-            {t}
-          </span>
-        )
-      })}
-      {GT && ghost != null && (
-        <span className="qs-lab-pill qs-lab-pill--ghost" style={{ position: 'absolute', left: n1(GT[0]), top: n1(GT[1]), transform: ttr, pointerEvents: 'none' }}>
-          {`${ax} ${ghost}`}
-        </span>
-      )}
-      <span className={'qs-lab-pill' + (held ? ' qs-lab-pill--held' : '')} style={{ position: 'absolute', left: n1(TT[0]), top: n1(TT[1]), transform: ttr, pointerEvents: 'none' }}>
-        {`${ax} ${k}`}
+      <span className="qs-lab-small" style={{ position: 'absolute', left: SX + 12, top: n1(yOf(k)), transform: 'translateY(-50%)', color: 'var(--qs-ink)', pointerEvents: 'none', transition: 'top 200ms var(--qs-ease)' }}>
+        <Count>{String(k)}</Count>
       </span>
+      {ghost != null && (
+        <span className="qs-lab-small" style={{ position: 'absolute', left: SX + 12, top: n1(yOf(ghost)), transform: 'translateY(-50%)', color: 'var(--qs-ink3)', pointerEvents: 'none' }}>{ghost}</span>
+      )}
+      <span className="qs-lab-small" style={{ position: 'absolute', left: SX - 3, top: 0, color: 'var(--qs-ink3)', pointerEvents: 'none' }}>{ax}</span>
     </div>
   )
 }
 
 // ---------------------------------------------------------------- v3 layer stack
 
-const ROW = 7 // px per stroke row (1px stroke + gap)
+const ROW = 4 // px per stroke row (1px stroke + gap)
 
 /** One stroke per layer group, top = highest layer, as long as the cells the model fills in it; the
  *  cursor at the cutting plane glides with it. Click or drag to set the slice. */
@@ -236,37 +207,37 @@ export function LayerStack({ ctx }: { ctx: HudCtx }) {
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
     setDrag(null)
   }
-  const width = (grp: number) => (counts[grp] ? 6 + 94 * (counts[grp] / peak) : 2)
+  const width = (grp: number) => (counts[grp] ? 4 + 60 * (counts[grp] / peak) : 2)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start' }}>
-      <span className="qs-lab-label">Layers</span>
       <div
         className="qs-lab-stack qs-lab-hit"
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}
         onPointerCancel={up}
-        style={{ position: 'relative', width: 200, cursor: drag != null ? 'grabbing' : 'pointer', userSelect: 'none', touchAction: 'none' }}
+        style={{ position: 'relative', width: 120, cursor: drag != null ? 'grabbing' : 'pointer', userSelect: 'none', touchAction: 'none' }}
       >
         {Array.from({ length: G }, (_, r) => {
           const grp = G - 1 - r, lo = grp * g, hi = Math.min(N - 1, lo + g - 1)
           const d = Math.abs(grp - cur)
           return (
-            <div key={grp} className="qs-lab-row" data-tip={g > 1 ? `Layers ${lo}–${hi}` : `Layer ${lo}`} data-tip-desc={`${counts[grp] ?? 0} cells`}
-              style={{ height: ROW, display: 'flex', alignItems: 'center' }}>
+            <div key={grp} className="qs-lab-row" data-tip={g > 1 ? `${lo}–${hi}` : String(lo)} data-tip-desc={`${counts[grp] ?? 0} cells`}
+              style={{ height: ROW, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className="qs-lab-small" style={{ width: 16, flex: 'none', textAlign: 'right', fontSize: 8, lineHeight: 1, color: 'var(--qs-ink4)', visibility: grp % 8 === 0 && d > 2 ? 'visible' : 'hidden' }}>{grp + 1}</span>
               <span className="qs-lab-stroke" style={{ width: width(grp), height: 1, flex: 'none', background: d === 0 ? 'var(--qs-ink)' : d < 3 ? 'var(--qs-ink3)' : 'var(--qs-ink4)' }} />
             </div>
           )
         })}
         {/* the cutting plane: a rule across the stack and its layer, gliding as it moves */}
-        <div className="qs-lab-cursor" style={{ transform: `translateY(${(G - 1 - cur) * ROW + ROW / 2}px)` }} aria-hidden>
+        <div className="qs-lab-cursor" style={{ left: 24, transform: `translateY(${(G - 1 - cur) * ROW + ROW / 2}px)` }} aria-hidden>
           <span className="qs-lab-cursor__rule" />
-          <span className="qs-lab-small" style={{ color: 'var(--qs-ink)' }}>layer {k}</span>
+          <span className="qs-lab-small" style={{ color: 'var(--qs-ink)' }}>{cur + 1}</span>
         </div>
       </div>
       <span className="qs-lab-small" style={{ color: 'var(--qs-ink3)' }}>
-        {ctx.slice.axis} 0–{N - 1} · <Count>{counts[cur] ?? 0}</Count> cells
+        <Count>{counts[cur] ?? 0}</Count>
       </span>
     </div>
   )

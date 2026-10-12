@@ -35,7 +35,8 @@ interface Shell {
   setHome: (v: boolean) => void
 }
 
-const KEY = 'qs-shell'
+// v2: the view comes first, so the columns start as rails and the drawer folded
+const KEY = 'qs-shell-2'
 const saved = (() => { try { return JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Shell> } catch { return {} } })()
 const keep = (s: Shell) => {
   try { localStorage.setItem(KEY, JSON.stringify({ tab: s.tab, left: s.left, right: s.right, bottom: s.bottom, drawer: s.drawer, drawerOpen: s.drawerOpen, swap: s.swap, leftOpen: s.leftOpen, rightOpen: s.rightOpen, dock: s.dock })) } catch { /* per-viewer */ }
@@ -63,11 +64,11 @@ export const useShell = create<Shell>()((set, get) => {
     setSize: (p) => up(p),
     drawer: saved.drawer ?? 'runtime',
     setDrawer: (d) => up({ drawer: d, drawerOpen: true }),
-    drawerOpen: saved.drawerOpen ?? true,
+    drawerOpen: saved.drawerOpen ?? false,
     setDrawerOpen: (v) => up({ drawerOpen: v }),
     swap: saved.swap ?? false,
-    leftOpen: saved.leftOpen ?? true,
-    rightOpen: saved.rightOpen ?? true,
+    leftOpen: saved.leftOpen ?? false,
+    rightOpen: saved.rightOpen ?? false,
     dock: saved.dock ?? 'view',
     setLayout: (p) => up(p),
     homeAsk: false,

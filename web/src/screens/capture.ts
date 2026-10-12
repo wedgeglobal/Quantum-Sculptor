@@ -1,7 +1,8 @@
 // Capture for Present mode. Screenshot and Record use the browser's tab capture, so they record
 // exactly what is on screen, HUD and all (the browser asks for permission each time). Render saves
 // the geometry alone at a higher resolution with a transparent background.
-import { usePresent } from '../present'
+import { gradeFilter, usePresent } from '../present'
+import { useStore } from '../store'
 import type { Engine } from '../view/engine'
 
 const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
@@ -92,7 +93,120 @@ export async function toggleRecording(): Promise<void> {
   rec.start(250)
 }
 
-export const isRecording = () => !!recorder
+export const isRecording = () => !!recorder || !!take
+
+/** The video types this browser can write, best first. */
+const MIME = {
+  mp4: ['video/mp4;codecs=avc1.640033', 'video/mp4;codecs=avc1.4d0033', 'video/mp4;codecs=avc1', 'video/mp4'],
+  webm: ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'],
+}
+export const mimeOf = (f: 'mp4' | 'webm') => (typeof MediaRecorder === 'undefined' ? undefined : MIME[f].find((t) => MediaRecorder.isTypeSupported(t)))
+
+let take: { stop: () => void } | null = null
+
+/** The encoder each file type uses, as WebCodecs names them (to ask what sizes it takes). */
+const CODEC = { mp4: 'avc1.640033', webm: 'vp09.00.51.08' }
+
+/** The largest size of this shape the browser can encode as `format`, at most w × h (even numbers).
+ *  H.264 (MP4) stops near 8.9 million pixels, about 4096 × 2176: ×3 of a 4:5 frame is beyond it; VP9
+ *  (WebM) goes further. Without WebCodecs to ask, those limits are assumed. */
+export async function encodable(w: number, h: number, format: 'mp4' | 'webm'): Promise<[number, number]> {
+  const even = (v: number) => Math.max(2, Math.round(v / 2) * 2)
+  const ask = async (a: number, b: number) => {
+    const VE = (globalThis as unknown as { VideoEncoder?: { isConfigSupported: (c: object) => Promise<{ supported?: boolean }> } }).VideoEncoder
+    if (!VE) return format === 'webm' ? a * b <= 35e6 : a * b <= 8.9e6 && Math.max(a, b) <= 4096
+    try { return !!(await VE.isConfigSupported({ codec: CODEC[format], width: a, height: b, bitrate: 20e6, framerate: 30 })).supported } catch { return false }
+  }
+  let k = 1
+  for (let i = 0; i < 40; i++) {
+    const a = even(w * k), b = even(h * k)
+    if (await ask(a, b)) return [a, b]
+    k *= 0.95
+  }
+  return [even(w * k), even(h * k)]
+}
+
+/** Shoots a take: hides the controls, starts the clock from 0, records the view alone for `sec` seconds
+ *  at `size` (w × h px; null for the view's own pixels) as `format`, then saves it. The browser asks
+ *  once to share this tab; its pixels are drawn into a canvas of the exact size, cropped to the view.
+ *  Call again (or stopTake) to end early. */
+export async function recordTake({ sec, format, size }: { sec: number; format: 'mp4' | 'webm'; size: [number, number] | null }): Promise<void> {
+  if (take) { take.stop(); return }
+  const mime = mimeOf(format) ?? mimeOf(format === 'mp4' ? 'webm' : 'mp4')
+  if (!mime) throw new Error('This browser cannot record video')
+  const stream = await tabStream()
+  const video = document.createElement('video')
+  video.srcObject = stream
+  video.muted = true
+  await video.play()
+  const p = usePresent.getState()
+  const was = { loop: p.loop, playing: p.playing }
+  p.setRecording(true)
+  p.setBare(true)
+  await frames(4)
+  const view = document.querySelector<HTMLElement>('.stage__view')
+  const vr0 = view?.getBoundingClientRect()
+  const dpr = window.devicePixelRatio || 1
+  const W = size?.[0] ?? Math.round((vr0?.width ?? video.videoWidth) * dpr), H = size?.[1] ?? Math.round((vr0?.height ?? video.videoHeight) * dpr)
+  // no larger than the encoder takes: beyond it the browser records nothing at all
+  const [cw, ch] = await encodable(W, H, mime.startsWith('video/mp4') ? 'mp4' : 'webm')
+  const c = document.createElement('canvas')
+  c.width = cw
+  c.height = ch
+  const g = c.getContext('2d')!
+  g.imageSmoothingQuality = 'high'
+  // the grade: already in the captured pixels when it is previewed on the view, else laid on here
+  const gr = usePresent.getState().grade
+  g.filter = gr.preview ? 'none' : gradeFilter(gr)
+  let raf = 0
+  const draw = () => {
+    const vr = view?.getBoundingClientRect()
+    const k = video.videoWidth / window.innerWidth
+    if (vr && video.videoWidth) g.drawImage(video, vr.left * k, vr.top * k, vr.width * k, vr.height * k, 0, 0, c.width, c.height)
+    raf = requestAnimationFrame(draw)
+  }
+  draw()
+  const rec = new MediaRecorder(c.captureStream(p.fps), { mimeType: mime, videoBitsPerSecond: Math.round(Math.min(40, Math.max(8, (c.width * c.height) / 1e5)) * 1_000_000) })
+  const chunks: Blob[] = []
+  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data) }
+  let failed: string | null = null
+  rec.onerror = (e) => { failed = String((e as unknown as { error?: Error }).error?.message ?? 'the recorder stopped') }
+  const done = new Promise<void>((res, rej) => {
+    rec.onstop = () => {
+      cancelAnimationFrame(raf)
+      stream.getTracks().forEach((t) => t.stop())
+      clearTimeout(timer)
+      take = null
+      const q = usePresent.getState()
+      q.setRecording(false)
+      q.setBare(false)
+      usePresent.setState({ loop: was.loop })
+      if (!was.playing) q.setPlaying(false)
+      const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm'
+      const blob = new Blob(chunks, { type: mime.split(';')[0] })
+      // an empty take is a failure, not a file
+      if (!blob.size) { rej(new Error(`Nothing was recorded at ${c.width} × ${c.height}${failed ? `: ${failed}` : ''}. Try a smaller size or WebM.`)); return }
+      download(blob, `quantum-sculptor-${c.width}x${c.height}-${stamp()}.${ext}`)
+      res()
+    }
+  })
+  const stop = () => { if (rec.state === 'recording') rec.stop() }
+  // the browser's own "Stop sharing" ends the take too
+  stream.getVideoTracks()[0]?.addEventListener('ended', stop)
+  take = { stop }
+  // from the top: the clock at 0 and playing, looping if the take outlasts one pass; an Evolve history
+  // back to its founding (turn 0), whatever plays its turns
+  usePresent.setState({ loop: true })
+  const st = useStore.getState()
+  if (st.evolve.history) { st.pause(); await st.setTurn(0) }
+  usePresent.getState().seek(0)
+  usePresent.getState().setPlaying(true)
+  rec.start(250)
+  const timer = setTimeout(stop, Math.max(1, sec) * 1000)
+  return done
+}
+/** Ends a take early; false when none is running. */
+export const stopTake = () => { if (!take) return false; take.stop(); return true }
 
 const blobOf = (url: string) => fetch(url).then((r) => r.blob())
 const img = (src: Blob) => new Promise<HTMLImageElement>((res, rej) => {
@@ -139,6 +253,8 @@ export async function exportFrame(engine: Engine | undefined, w: number, h: numb
     c.width = w
     c.height = h
     const g = c.getContext('2d')!
+    // the grade over the whole frame (the view's own preview filter is not in these renders)
+    g.filter = gradeFilter(usePresent.getState().grade)
     g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--qs-bg').trim() || '#E3E4E7'
     g.fillRect(0, 0, w, h)
     for (const part of [await blobOf(ground), geo, await blobOf(over)]) {

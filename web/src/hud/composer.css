@@ -7,14 +7,14 @@
 .hud-slot { position: absolute; display: flex; gap: 12px; pointer-events: none; max-width: calc(50% - 40px); }
 .hud-slot > * { pointer-events: none; }
 .hud-slot > .hud-mod--live, .hud-slot > .hud-chrome { pointer-events: auto; }
-.hud-slot--tl { left: 36px; top: 34px; flex-direction: column; align-items: flex-start; }
-.hud-slot--tr { right: 36px; top: 34px; flex-direction: column; align-items: flex-end; }
-.hud-slot--bl { left: 36px; bottom: 34px; flex-direction: column-reverse; align-items: flex-start; }
-.hud-slot--br { right: 36px; bottom: 34px; flex-direction: column-reverse; align-items: flex-end; }
-.hud-slot--top { left: 50%; top: 18px; transform: translateX(-50%); flex-direction: column; align-items: center; max-width: 60%; }
-.hud-slot--bottom { left: 50%; bottom: 22px; transform: translateX(-50%); flex-direction: column; align-items: center; max-width: 60%; }
-.hud-slot--left { left: 14px; top: 50%; transform: translateY(-50%); flex-direction: column; align-items: flex-start; }
-.hud-slot--right { right: 14px; top: 50%; transform: translateY(-50%); flex-direction: column; align-items: flex-end; }
+.hud-slot--tl { left: calc(var(--pad-l, 12px) + 24px); top: calc(var(--pad-t, 10px) + 24px); flex-direction: column; align-items: flex-start; }
+.hud-slot--tr { right: calc(var(--pad-r, 12px) + 24px); top: calc(var(--pad-t, 10px) + 24px); flex-direction: column; align-items: flex-end; }
+.hud-slot--bl { left: calc(var(--pad-l, 12px) + 24px); bottom: calc(var(--pad-b, 10px) + 24px); flex-direction: column-reverse; align-items: flex-start; }
+.hud-slot--br { right: calc(var(--pad-r, 12px) + 24px); bottom: calc(var(--pad-b, 10px) + 24px); flex-direction: column-reverse; align-items: flex-end; }
+.hud-slot--top { left: 50%; top: calc(var(--pad-t, 0px) + 18px); transform: translateX(-50%); flex-direction: column; align-items: center; max-width: 60%; }
+.hud-slot--bottom { left: 50%; bottom: calc(var(--pad-b, 0px) + 22px); transform: translateX(-50%); flex-direction: column; align-items: center; max-width: 60%; }
+.hud-slot--left { left: calc(var(--pad-l, 0px) + 14px); top: 50%; transform: translateY(-50%); flex-direction: column; align-items: flex-start; }
+.hud-slot--right { right: calc(var(--pad-r, 0px) + 14px); top: 50%; transform: translateY(-50%); flex-direction: column; align-items: flex-end; }
 
 /* composer menu */
 .cmp-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
@@ -92,3 +92,19 @@
 /* a piece holding still: no easing, no keyframes of its own */
 .hud-still { display: contents; }
 .hud-still *, .hud-still *::before, .hud-still *::after { animation: none !important; transition: none !important; }
+/* on the view a piece carries no title, only its diagram and figures; the library keeps the names */
+.hud-layer :is(.qs-lab-meta__title, .qh-sc, .qh-val, .hud-card__t, .qg-t, .qdm-t, .hpar__t, .hev-t, .blk__title, .qs-lab-label) { display: none; }
+/* nor a key in words: the marks read by their shape, the figures by their place */
+.hud-layer :is(.hev-legend, .qdm-legend, .qg-legend) { display: none; }
+/* the layout grid behind the pieces while arranging: 24 px modules from one module in; it firms up
+   while a piece is dragged or resized, which snaps to it */
+.hud-grid {
+  position: absolute; inset: var(--pad-t, 24px) var(--pad-r, 24px) var(--pad-b, 24px) var(--pad-l, 24px); pointer-events: none; opacity: .28; transition: opacity .15s;
+  background-image:
+    linear-gradient(to right, var(--qs-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--qs-line) 1px, transparent 1px),
+    linear-gradient(to right, var(--qs-ink4) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--qs-ink4) 1px, transparent 1px);
+  background-size: 24px 24px, 24px 24px, 96px 96px, 96px 96px;
+}
+.hud-layer--dragging > .hud-grid { opacity: .9; }
