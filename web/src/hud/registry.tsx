@@ -13,15 +13,15 @@ import * as frame from './frame'
 import * as meta from './meta'
 import { Title } from './title'
 import * as scan from './scan'
-import * as steps from './steps'
+import * as navdots from './navdots'
 import * as captures from './captures'
 import * as cards from './cards'
 import * as stages from './stages'
 import * as glyphs from './glyphs'
 import * as datamarks from './datamarks'
-import * as navmore from './navmore'
 import * as controls from './controls'
 import * as evolve from './evolve'
+import * as charts from './charts'
 import { AtlasJobs, Param } from './params'
 import { PARAMS } from './paramDefs'
 import { GridOut, ModelOut, PrintOut, QuantumOut } from '../screens/OutputPane'
@@ -32,28 +32,11 @@ export const ORBIT_MODULES: HudModule[] = [
   {
     family: 'orbit',
     id: 'v1',
-    label: 'gimbal',
-    desc: 'Azimuth ring, elevation arc, camera node',
+    label: 'ring',
+    desc: 'A hairline ring round the object, four nodes on it and the camera on its arc',
     slot: 'object',
     interactive: true,
     render: (ctx) => <orbit.GimbalRing ctx={ctx} />,
-  },
-  {
-    family: 'orbit',
-    id: 'v2',
-    label: 'cage',
-    desc: 'Latitude and meridians, for free orbit',
-    slot: 'object',
-    render: (ctx) => <orbit.Cage ctx={ctx} />,
-  },
-  {
-    family: 'orbit',
-    id: 'v3',
-    label: 'stations',
-    desc: 'Twelve fixed views, visited ones filled',
-    slot: 'object',
-    interactive: true,
-    render: (ctx) => <orbit.Stations ctx={ctx} />,
   },
   {
     family: 'orbit',
@@ -66,11 +49,20 @@ export const ORBIT_MODULES: HudModule[] = [
   {
     family: 'orbit',
     id: 'v5',
-    label: 'gimbal states',
-    desc: 'Scales appear only while the hand is on it',
+    label: 'gimbal',
+    desc: 'The orbit gimbal, drawn flat; its angles show while it or the camera moves',
     slot: 'bl',
     interactive: true,
     render: (ctx) => <orbit.GimbalStates ctx={ctx} />,
+  },
+  {
+    family: 'orbit',
+    id: 'v6',
+    label: 'gimbal values',
+    desc: 'Azimuth, elevation and distance, with Front, Side, Top and Iso under them',
+    slot: 'bl',
+    interactive: true,
+    render: (ctx) => <orbit.GimbalValues ctx={ctx} />,
   },
 ]
 
@@ -158,15 +150,16 @@ export const SELECTION_MODULES: HudModule[] = [
   { family: 'selection', id: 'v2', label: 'lock-on', desc: 'Corners close in over 240 ms', slot: 'object', render: (ctx) => <selection.LockOn ctx={ctx} /> },
   { family: 'selection', id: 'v3', label: 'target', desc: 'Axis ticks give the cell address', slot: 'object', render: (ctx) => <selection.Target ctx={ctx} /> },
   { family: 'selection', id: 'v4', label: 'cell in slice', desc: 'Row and column tinted', slot: 'object', render: (ctx) => <selection.CellInSlice ctx={ctx} /> },
+  { family: 'selection', id: 'v5', label: 'tracking', desc: 'Boxes on cells of the object with their values, joined by lines; they pick new cells on their own', slot: 'object', render: (ctx) => <selection.Tracking ctx={ctx} /> },
 ]
 
 // ── callout ──────────────────────────────────────────────────────────────────────────────────────
 
 export const CALLOUT_MODULES: HudModule[] = [
-  { family: 'callout', id: 'v1', label: 'dot leader', desc: 'Code label, lowercase', slot: 'object', render: (ctx) => <callout.DotLeader ctx={ctx} /> },
+  { family: 'callout', id: 'v1', label: 'dot leader', desc: 'What goes on at a cell in the step on screen: where it is, how full, its qubits in and out, its nation, the skin', slot: 'object', render: (ctx) => <callout.DotLeader ctx={ctx} /> },
   { family: 'callout', id: 'v2', label: 'elbow', desc: 'Two lines of data on a shelf', slot: 'object', render: (ctx) => <callout.Elbow ctx={ctx} /> },
   { family: 'callout', id: 'v3', label: 'numbered', desc: 'Keeps labels off a busy object', slot: 'object', render: (ctx) => <callout.Numbered ctx={ctx} /> },
-  { family: 'callout', id: 'v4', label: 'value flag', desc: 'Pill flag for a probed value', slot: 'object', render: (ctx) => <callout.ValueFlag ctx={ctx} /> },
+  { family: 'callout', id: 'v4', label: 'value flag', desc: 'The one figure the step changes at a cell: its height, how full it is, what the blur moved, its nation, inside or outside the skin', slot: 'object', render: (ctx) => <callout.ValueFlag ctx={ctx} /> },
 ]
 
 // ── frame ────────────────────────────────────────────────────────────────────────────────────────
@@ -187,22 +180,6 @@ export const FRAME_MODULES: HudModule[] = [
     desc: 'Ink corner brackets around the view and a grey centre cross.',
     slot: 'full',
     render: (ctx) => <frame.Brackets ctx={ctx} />,
-  },
-  {
-    family: 'frame',
-    id: 'v3',
-    label: 'bracket + dots',
-    desc: 'Grey corners with sparse edge dots; the lightest frame.',
-    slot: 'full',
-    render: (ctx) => <frame.BracketDots ctx={ctx} />,
-  },
-  {
-    family: 'frame',
-    id: 'v4',
-    label: 'safe area',
-    desc: 'Dashed frame at 80% of the view with thirds, for framing a capture.',
-    slot: 'full',
-    render: (ctx) => <frame.SafeArea ctx={ctx} />,
   },
 ]
 
@@ -299,46 +276,11 @@ export const SCAN_MODULES: HudModule[] = [
 // ── steps ────────────────────────────────────────────────────────────────────────────────────────
 
 export const STEPS_MODULES: HudModule[] = [
-  {
-    family: 'steps',
-    id: 'v1',
-    label: 'index bar',
-    desc: 'The pill slides in 350 ms with ease-out. Done steps stay ink, later steps grey.',
-    slot: 'top',
-    interactive: true,
-    render: (ctx) => <steps.IndexBar ctx={ctx} />,
-  },
-  {
-    family: 'steps',
-    id: 'v2',
-    label: 'rail with nodes',
-    desc: 'Progress line grows in 500 ms. The live node pings every 1.8 s.',
-    slot: 'top',
-    interactive: true,
-    render: (ctx) => <steps.Rail ctx={ctx} />,
-  },
-  {
-    family: 'steps',
-    id: 'v3',
-    label: 'side index',
-    desc: 'The position bar moves in 300 ms. Fits a narrow left edge.',
-    slot: 'left',
-    interactive: true,
-    render: (ctx) => <steps.SideIndex ctx={ctx} />,
-  },
-  {
-    family: 'steps',
-    id: 'v4',
-    label: 'step ring',
-    desc: 'Echoes the dials. The needle turns in 450 ms.',
-    slot: 'tr',
-    interactive: true,
-    render: (ctx) => <steps.StepRing ctx={ctx} />,
-  },
+  { family: 'steps', id: 'v1', label: 'nodes', desc: 'The four steps as nodes on a line: done filled, the live one ringed. Click a node to go there.', slot: 'top', interactive: true, render: (ctx) => <navdots.StepNodes ctx={ctx} /> },
 ]
 
 /** The default steps variant: v2, B · rail with nodes. */
-export const STEPS_DEFAULT = 'v2'
+export const STEPS_DEFAULT = 'v1'
 
 // ── captures ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -347,36 +289,10 @@ export const CAPTURES_MODULES: HudModule[] = [
     family: 'captures',
     id: 'v1',
     label: 'dots',
-    desc: 'One dot per run: grey for past runs, a ring for the newest, empty rings to ten.',
-    slot: 'bottom',
-    render: (ctx) => <captures.Dots ctx={ctx} labels={false} />,
-  },
-  {
-    family: 'captures',
-    id: 'v2',
-    label: 'dots with labels',
-    desc: 'The same dots; hover one to read its run.',
+    desc: 'One dot per run: grey for past runs, a ring for the newest, empty rings to ten; hover one to read its run.',
     slot: 'bottom',
     interactive: true,
     render: (ctx) => <captures.Dots ctx={ctx} labels />,
-  },
-  {
-    family: 'captures',
-    id: 'v3',
-    label: 'timeline',
-    desc: 'Runs on a time axis, first run to the newest.',
-    slot: 'bottom',
-    interactive: true,
-    render: (ctx) => <captures.Timeline ctx={ctx} />,
-  },
-  {
-    family: 'captures',
-    id: 'v4',
-    label: 'strength × reach',
-    desc: 'Past runs plotted by strength and reach; the cross is the current setting.',
-    slot: 'bottom',
-    interactive: true,
-    render: (ctx) => <captures.Scatter ctx={ctx} />,
   },
 ]
 
@@ -526,83 +442,24 @@ export const DATA_FAMILIES: FamilyDef[] = [
   },
 ]
 
-// ── navmore ──────────────────────────────────────────────────────────────────────────────────────
+// ── navigation ──────────────────────────────────────────────────────────────────────────────────────
 
 const TIMELINE: HudModule[] = [
-  {
-    family: 'timeline',
-    id: 'v1',
-    label: 'run timeline',
-    desc: 'Steps as time ranges, for reviewing a finished run. Not to scale.',
-    slot: 'bottom',
-    render: (ctx) => <navmore.RunTimeline ctx={ctx} />,
-  },
-  {
-    family: 'timeline',
-    id: 'v2',
-    label: 'with tiles',
-    desc: 'Local work, the three Atlas slots and the 2 s polls, to scale. Drag to scrub.',
-    slot: 'bottom',
-    interactive: true,
-    render: (ctx) => <navmore.RunTiles ctx={ctx} />,
-  },
+  { family: 'timeline', id: 'v1', label: 'segments', desc: 'The last run’s requests as segments to scale, model to mesh, and the total time.', slot: 'bottom', render: (ctx) => <navdots.RunBar ctx={ctx} /> },
 ]
 
 const BARS: HudModule[] = [
-  {
-    family: 'bars',
-    id: 'v1',
-    label: 'tabs',
-    desc: 'Values sit under each tab, so the bar is also a summary. The underline moves in 350 ms.',
-    slot: 'top',
-    interactive: true,
-    render: (ctx) => <navmore.Tabs ctx={ctx} />,
-  },
-  {
-    family: 'bars',
-    id: 'v2',
-    label: 'segmented progress',
-    desc: 'The live step fills with its own progress, here tiles returned.',
-    slot: 'bottom',
-    interactive: true,
-    render: (ctx) => <navmore.Segmented ctx={ctx} />,
-  },
-  {
-    family: 'bars',
-    id: 'v3',
-    label: 'breadcrumb',
-    desc: 'Reads as one sentence about the run. The current step is outlined in ink.',
-    slot: 'top',
-    interactive: true,
-    render: (ctx) => <navmore.Breadcrumb ctx={ctx} />,
-  },
+  { family: 'bars', id: 'v1', label: 'progress', desc: 'Four cells: done steps filled, the live one filling as its job comes back.', slot: 'bottom', render: (ctx) => <navdots.Progress ctx={ctx} /> },
 ]
 
 const INDEXES: HudModule[] = [
-  {
-    family: 'indexes',
-    id: 'v1',
-    label: 'ruler index',
-    desc: 'Steps as long ticks on a scale. The live step lists its settings.',
-    slot: 'left',
-    interactive: true,
-    render: (ctx) => <navmore.Ruler ctx={ctx} />,
-  },
-  {
-    family: 'indexes',
-    id: 'v2',
-    label: 'expanding index',
-    desc: 'One step open at a time; a line, not a box, holds its settings.',
-    slot: 'right',
-    interactive: true,
-    render: (ctx) => <navmore.Expanding ctx={ctx} />,
-  },
+  { family: 'indexes', id: 'v1', label: 'ruler', desc: 'The steps on a vertical ruler; the live one reaches furthest. Click one to go there.', slot: 'left', interactive: true, render: (ctx) => <navdots.StepRuler ctx={ctx} /> },
 ]
 
 export const NAV_FAMILIES: FamilyDef[] = [
-  { id: 'timeline', title: 'Run timeline', desc: 'The last run, step by step and tile by tile', modules: TIMELINE },
-  { id: 'bars', title: 'Bars', desc: 'Tabs, progress and a breadcrumb through the steps', modules: BARS },
-  { id: 'indexes', title: 'Indexes', desc: 'Step indexes that open onto their settings', modules: INDEXES },
+  { id: 'timeline', title: 'Run timeline', desc: 'How long the last run took, step by step', modules: TIMELINE },
+  { id: 'bars', title: 'Progress', desc: 'How far the pipeline and its job have come', modules: BARS },
+  { id: 'indexes', title: 'Index', desc: 'The steps on a ruler', modules: INDEXES },
 ]
 
 // ── controls ─────────────────────────────────────────────────────────────────────────────────────
@@ -647,32 +504,54 @@ export const CONTROL_FAMILIES: FamilyDef[] = [
 // ── library ────────────────────────────────────────────────────────────────────────────────────────
 
 export const EVOLVE_MODULES: HudModule[] = [
-  { family: 'evolve', id: 'v1', label: 'nations', desc: 'This turn’s nations by territory, with what each did.', slot: 'tr', render: () => <evolve.Nations /> },
-  { family: 'evolve', id: 'v2', label: 'territory', desc: 'Every nation’s share of the territory over the whole history; wars, annexations and splits marked under it.', slot: 'bottom', render: () => <evolve.Territory /> },
-  { family: 'evolve', id: 'v3', label: 'chronicle', desc: 'The latest wars, annexations, splits, exiles and deaths up to this turn.', slot: 'bl', render: () => <evolve.Chronicle /> },
-  { family: 'evolve', id: 'v4', label: 'relations', desc: 'Nations where they sit on the model, sized by territory: borders weighted by their ties, this turn’s attacks in red, exiles ringed.', slot: 'br', render: () => <evolve.Relations /> },
-  { family: 'evolve', id: 'v6', label: 'log', desc: 'The turns up to this one, one line each, as the Evolve log tells them.', slot: 'bl', render: () => <evolve.Log /> },
-  { family: 'evolve', id: 'v7', label: 'one nation', desc: 'The nation picked in the view (else the largest): its cells, share and territory over the history.', slot: 'tr', render: () => <evolve.Picked /> },
-  { family: 'evolve', id: 'v5', label: 'record', desc: 'Alive, wars, annexations and splits so far, as figures.', slot: 'tl', render: () => <evolve.Record /> },
+  { family: 'evolve', id: 'v1', label: 'nations', desc: 'This turn’s nations by territory, with what each did.', slot: 'tr', render: () => <evolve.Gate><evolve.Nations /></evolve.Gate> },
+  { family: 'evolve', id: 'v2', label: 'territory', desc: 'Every nation’s share of the territory over the whole history; wars, annexations and splits marked under it.', slot: 'bottom', render: () => <evolve.Gate><evolve.Territory /></evolve.Gate> },
+  { family: 'evolve', id: 'v3', label: 'chronicle', desc: 'The latest wars, annexations, splits, exiles and deaths up to this turn.', slot: 'bl', render: () => <evolve.Gate><evolve.Chronicle /></evolve.Gate> },
+  { family: 'evolve', id: 'v4', label: 'relations', desc: 'Nations where they sit on the model, sized by territory: borders weighted by their ties, this turn’s attacks in red, exiles ringed.', slot: 'br', render: () => <evolve.Gate><evolve.Relations /></evolve.Gate> },
+  { family: 'evolve', id: 'v8', label: 'relations, ranked', desc: 'The nations in a row by territory, sliding as it changes, each with what it gained or lost this turn; ties and alliances arc above, this turn’s attacks arc below in red.', slot: 'bottom', render: () => <evolve.Gate><evolve.RelationsRanked /></evolve.Gate> },
+  { family: 'evolve', id: 'v6', label: 'log', desc: 'The turns up to this one, one line each, as the Evolve log tells them.', slot: 'bl', render: () => <evolve.Gate><evolve.Log /></evolve.Gate> },
+  { family: 'evolve', id: 'v7', label: 'one nation', desc: 'The nation picked in the view (else the largest): its cells, share and territory over the history.', slot: 'tr', render: () => <evolve.Gate><evolve.Picked /></evolve.Gate> },
+  { family: 'evolve', id: 'v5', label: 'record', desc: 'Alive, wars, annexations and splits so far, as figures.', slot: 'tl', render: () => <evolve.Gate><evolve.Record /></evolve.Gate> },
+]
+
+export const CHARTS_MODULES: HudModule[] = [
+  { family: 'charts', id: 'v1', label: 'circuit', desc: 'The circuit: a playhead runs across the wires, gates light as it passes, and each pass measures the real result: a cell drawn by its value, its bits on the wires.', slot: 'bottom', render: (ctx) => <charts.Circuit ctx={ctx} /> },
+  { family: 'charts', id: 'v2', label: 'register', desc: 'The qubits per axis, shaded by their turn, a wave running through them.', slot: 'bl', render: (ctx) => <charts.Register ctx={ctx} /> },
+  { family: 'charts', id: 'v3', label: 'qubit bars', desc: 'Each qubit’s rotation swinging up to its θ and back; higher qubits slower.', slot: 'br', render: (ctx) => <charts.QubitBars ctx={ctx} /> },
+  { family: 'charts', id: 'v4', label: 'density bars', desc: 'The result’s values as a histogram that grows in, with the level marked.', slot: 'bottom', render: (ctx) => <charts.DensityBars ctx={ctx} /> },
+  { family: 'charts', id: 'v6', label: 'blur, real row', desc: 'One row of your grid through the plane: the input’s amplitudes morph into the quantum result and back; brackets show what each qubit pairs.', slot: 'bottom', render: (ctx) => <charts.BlurRow ctx={ctx} /> },
+  { family: 'charts', id: 'v7', label: 'requests', desc: 'The real calls of this session (voxelise, process, Atlas, mesh) as packets out and back, and an Atlas job’s tiles as they return.', slot: 'br', render: (ctx) => <charts.Requests ctx={ctx} /> },
+  { family: 'charts', id: 'v5', label: 'figures', desc: 'Qubits, solid cells and faces, counting up one after another.', slot: 'tl', render: (ctx) => <charts.Figures ctx={ctx} /> },
+]
+
+/** The slicers: a plane through the grid along each axis, each carrying its section. They sweep
+ *  together (Animate and output · Slicers); the view draws them itself. */
+export const SLICER_AXIS = { v1: 'z', v2: 'x', v3: 'y' } as const
+export const PLANE_MODULES: HudModule[] = [
+  { family: 'plane', id: 'v1', label: 'slicer Z', desc: 'A horizontal plane through the grid, with its section.', slot: 'object', render: () => null },
+  { family: 'plane', id: 'v2', label: 'slicer X', desc: 'A plane across the grid along X, with its section.', slot: 'object', render: () => null },
+  { family: 'plane', id: 'v3', label: 'slicer Y', desc: 'A plane across the grid along Y, with its section.', slot: 'object', render: () => null },
 ]
 
 export const FAMILIES: FamilyDef[] = [
-  { id: 'frame', title: 'Frame', desc: 'Registration marks around the view', modules: FRAME_MODULES },
+  { id: 'plane', title: 'Slicers', desc: 'Planes through the grid along X, Y and Z, with their sections', modules: PLANE_MODULES },
+  { id: 'frame', title: 'Frame', desc: 'Registration marks and brackets around the view', modules: FRAME_MODULES },
   { id: 'meta', title: 'Readouts', desc: 'History, scene and quantum blocks in the corners', modules: META_MODULES },
-  { id: 'steps', title: 'Steps', desc: 'Where you are in the pipeline', modules: STEPS_MODULES },
+  { id: 'steps', title: 'Steps', desc: 'Where you are in the pipeline, as nodes', modules: STEPS_MODULES },
   { id: 'orbit', title: 'Orbit rings', desc: 'Where the view camera is, and where it can go', modules: ORBIT_MODULES },
   { id: 'camera', title: 'Camera, abstracted', desc: 'The view camera as a diagram', modules: CAMERA_MODULES },
   { id: 'dial', title: 'Orbit, abstracted', desc: 'Position as numbers on scales', modules: DIAL_MODULES },
   { id: 'bounds', title: 'Bounds', desc: 'The grid volume and the print size', modules: BOUNDS_MODULES },
   { id: 'focus', title: 'Focus', desc: 'What the view camera is looking at', modules: FOCUS_MODULES },
-  { id: 'selection', title: 'Selection', desc: 'The probed cell', modules: SELECTION_MODULES },
+  { id: 'selection', title: 'Selection', desc: 'The probed cell, or cells picked on their own', modules: SELECTION_MODULES },
   { id: 'callout', title: 'Callouts', desc: 'Data attached to a point', modules: CALLOUT_MODULES },
   { id: 'scan', title: 'Scan and slice', desc: 'The layer being read or printed', modules: SCAN_MODULES },
-  { id: 'captures', title: 'Captures', desc: 'Runs or shots this session', modules: CAPTURES_MODULES },
+  { id: 'captures', title: 'Captures', desc: 'Runs this session, as dots', modules: CAPTURES_MODULES },
   { id: 'slicecard', title: 'Slice card', desc: 'The section under the cutting plane', modules: SLICECARD_MODULES },
   { id: 'cards', title: 'Data cards', desc: 'Quantum result, print check, model, grid', modules: CARDS_MODULES },
   { id: 'stages', title: 'Stages', desc: 'Model, voxels, quantum and mesh side by side', modules: STAGES_MODULES },
   ...NAV_FAMILIES, ...GLYPH_FAMILIES, ...DATA_FAMILIES, ...CONTROL_FAMILIES,
+  { id: 'charts', title: 'Infographics', desc: 'The Quantum properties, animated: circuit, register, qubit bars, density bars, figures', modules: CHARTS_MODULES },
   { id: 'evolve', title: 'Evolve', desc: 'Nations: roster, territory over the history, chronicle, relations, record, log, one nation', modules: EVOLVE_MODULES },
   {
     id: 'param', title: 'Parameters', desc: 'Any setting as a readout: its name, its value and where it sits in its range',
@@ -682,7 +561,9 @@ export const FAMILIES: FamilyDef[] = [
 
 /** The library's categories, in the Quicksilver Library's order: each holds families, each family variants. */
 export const CATEGORIES: { id: string; title: string; icon: string; fams: Family[] }[] = [
-  { id: 'marks', title: 'Marks', icon: 'frame', fams: ['frame', 'orbit', 'camera', 'dial', 'bounds', 'focus', 'selection', 'callout', 'scan'] },
+  { id: 'scene', title: 'Scene', icon: 'frame', fams: ['frame', 'plane'] },
+  { id: 'marks', title: 'Marks', icon: 'orbit', fams: ['orbit', 'camera', 'dial', 'bounds', 'focus', 'selection', 'callout', 'scan'] },
+  { id: 'charts', title: 'Infographics', icon: 'quantum', fams: ['charts'] },
   { id: 'params', title: 'Parameters', icon: 'sliceTool', fams: ['param'] },
   { id: 'nav', title: 'Navigation', icon: 'navigate', fams: ['steps', 'timeline', 'bars', 'indexes', 'captures'] },
   { id: 'evolve', title: 'Evolve', icon: 'entangle', fams: ['evolve'] },

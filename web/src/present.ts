@@ -11,6 +11,23 @@ import { DEFAULT_COMPOSITION, DEFAULT_HUD, DEFAULT_ID } from './hud/defaultCompo
 import type { SliceColor, SliceOf } from './qs/sectionColor'
 
 export interface Shot { az: number; el: number; dist: number }
+/** The frame's padding: room kept clear inside each edge, in % of the frame's short side; `linked`
+ *  moves all four together. Pieces sit inside it and the grid starts at it. */
+export interface FramePad { t: number; r: number; b: number; l: number; linked: boolean }
+/** A simple grade for what leaves the app (videos and frames): exposure in stops (brightness ×2^ev),
+ *  contrast and saturation as factors, a lift of the shadows; `preview` shows it on the view too. */
+export interface Grade { exposure: number; contrast: number; saturation: number; lift: number; preview: boolean }
+export const GRADE: Grade = { exposure: 0, contrast: 1, saturation: 1, lift: 0, preview: true }
+/** The grade as a CSS / canvas filter, or 'none' when it changes nothing. */
+export function gradeFilter(g: Grade): string {
+  const parts: string[] = []
+  if (g.exposure) parts.push(`brightness(${(2 ** g.exposure).toFixed(3)})`)
+  if (g.lift) parts.push(`contrast(${(1 - g.lift * 0.5).toFixed(3)})`, `brightness(${(1 + g.lift * 0.35).toFixed(3)})`)   // shadows up, highlights kept near
+  if (g.contrast !== 1) parts.push(`contrast(${g.contrast.toFixed(3)})`)
+  if (g.saturation !== 1) parts.push(`saturate(${g.saturation.toFixed(3)})`)
+  return parts.length ? parts.join(' ') : 'none'
+}
+export const FRAME_PAD: FramePad = { t: 4, r: 4, b: 4, l: 4, linked: true }
 /** Fractions of the view: the piece's top-left, or its centre when `c` (where a dragged component was dropped). */
 export interface Pos { x: number; y: number; c?: boolean; auto?: boolean; z?: number; out?: boolean; anchor?: boolean }
 /** How one component is drawn: emphasis tier (1 primary, 2 secondary, 3 tertiary), line weight and dash
@@ -33,21 +50,38 @@ export type SplitLayer = 'model' | 'voxels' | 'processed' | 'result'
 /** Split view: the cutting plane divides the object, one layer under it and another over it. */
 export interface Split { on: boolean; below: SplitLayer; above: SplitLayer }
 /** The loop: the run told from the original geometry to the mesh, one segment per step (each can be
- *  left out): model, voxels and mesh hold `sec` seconds; Evolve plays its turns at `tps` a second (the
- *  quantum step holds `sec`). `blend`: each step cuts, fades in, or wipes up through the plane.
- *  The cutting plane sweeps between `from` and `to` (fractions of the grid), one pass in `planeSec`. */
+ *  left out). Each step holds its own `hold` seconds; Evolve plays its turns at `tps` a second, then holds
+ *  `hold.quantum`. Between steps (`blend`) the view cuts, morphs (one layer dissolving into the next) or
+ *  grows the next up through the plane; `morph` seconds either way, on the loop and on a click alike.
+ *  The cutting plane sweeps between `from` and `to` (fractions of the grid), one pass in `planeSec`,
+ *  `planeStep` layers at a time. `sec` is the hold older saves had for every step. */
 export interface Reel {
   on: boolean; sec: number; tps: number; segs: { model: boolean; voxels: boolean; quantum: boolean; mesh: boolean }
-  blend: Blend
-  plane: PlaneRun; planeSec: number; planeMode: 'bounce' | 'up' | 'down'; from: number; to: number
+  hold: { model: number; voxels: number; quantum: number; mesh: number }
+  blend: Blend; morph: number
+  plane: PlaneRun; planeSec: number; planeMode: 'bounce' | 'up' | 'down'; from: number; to: number; planeStep: number
 }
 export const REEL: Reel = {
-  on: true, sec: 4, tps: 4, segs: { model: true, voxels: true, quantum: true, mesh: true },
-  blend: 'wipe', plane: 'loop', planeSec: 8, planeMode: 'bounce', from: 0, to: 1,
+  on: true, sec: 4, tps: 3, segs: { model: true, voxels: true, quantum: true, mesh: true },
+  hold: { model: 4, voxels: 4, quantum: 4, mesh: 4 },
+  blend: 'fade', morph: 0.75, plane: 'loop', planeSec: 8, planeMode: 'bounce', from: 0, to: 1, planeStep: 1,
 }
+/** A loop from a save of any age: missing fields from the defaults, each step's hold from the old `sec`. */
+export function reelOf(r: Partial<Omit<Reel, 'blend'>> & { blend?: Blend | boolean } | undefined): Reel {
+  const sec = r?.sec ?? REEL.sec
+  return {
+    ...REEL, ...r, segs: { ...REEL.segs, ...r?.segs }, blend: blendOf(r?.blend),
+    hold: { model: sec, voxels: sec, quantum: sec, mesh: sec, ...r?.hold },
+  }
+}
+/** Pieces that move by themselves: the selection marks and callouts pick cells on the object on their
+ *  own (one every `hop` seconds) when nothing is hovered or pinned; the tracking overlay follows `boxes`
+ *  cells at once, joined by lines when `links`. */
+export interface Auto { targets: boolean; hop: number; boxes: number; links: boolean }
+export const AUTO: Auto = { targets: true, hop: 1.6, boxes: 9, links: true }
 /** How a saved composition plays: the loop, the pieces holding still, the split, the clock's speed and
  *  loop, the look of the slice. Older saves have none and keep what is set. */
-export interface SavedMotion { reel: Reel; still: Record<string, true>; split: Split; speed: number; loop: boolean; slice?: { of: SliceOf; color: SliceColor } }
+export interface SavedMotion { reel: Reel; still: Record<string, true>; split: Split; speed: number; loop: boolean; slice?: { of: SliceOf; color: SliceColor }; auto?: Auto }
 /** How a saved composition looks besides its pieces: the scene's shading, lighting, backdrop and
  *  entanglement shader, the view's own controls (and explanations in pieces), which layers are shown,
  *  the look cycling, the turntable and the frame. Older saves have none and keep what is set. */
@@ -55,6 +89,8 @@ export interface SavedView {
   shading: Shading; shade: StoreState['shade']; hud: Hud; notes: boolean
   layers: Partial<Record<Layer, boolean>>; cycles: Cycles
   spin: boolean; spinSpeed: number; spinDir: 1 | -1; frame: FrameId
+  /** Saved since: the output's grade, the frame's padding and size, the HUD's size, the rhythm, the frame rate. */
+  grade?: Grade; pad?: FramePad; outSize?: number; hudSize?: number; rhythm?: P['rhythm']; fps?: 30 | 60
 }
 export interface Saved { id: string; name: string; compose: Record<string, string>; pos: Record<string, Pos>; looks: Record<string, Look>; texts: TextNote[]; guides?: Guides; motion?: SavedMotion; view?: SavedView
   /** The Default only: its published revision. A browser keeping an older one takes the newer. */
@@ -110,6 +146,22 @@ interface P {
   setFrame: (f: FrameId) => void
   outSize: number
   setOutSize: (i: number) => void
+  pad: FramePad
+  setPad: (p: Partial<FramePad>) => void
+  grade: Grade
+  setGrade: (g: Partial<Grade>) => void
+  /** The padding drawn dashed on the view (never exported). */
+  padGuide: boolean
+  setPadGuide: (v: boolean) => void
+  /** The camera orbits round the object's own centre, and a layout frames it in the middle of the view. */
+  centred: boolean
+  setCentred: (v: boolean) => void
+  /** Frames a second while something animates: 30 (lighter, the rate of most social video) or 60. */
+  fps: 30 | 60
+  setFps: (v: 30 | 60) => void
+  /** Every piece on the view at this multiple of its own size, in any frame (1: as designed). */
+  hudSize: number
+  setHudSize: (v: number) => void
   /** Put a component on the view: at a point (centre, fractions of the view) or in its usual place. */
   place: (family: string, id: string, at?: { x: number; y: number }) => void
   /** Take a piece off the view. */
@@ -134,6 +186,10 @@ interface P {
   spinSpeed: number
   cycleSec: number
   setMotion: (p: Partial<Pick<P, 'reelSec' | 'spinSpeed' | 'cycleSec'>>) => void
+  /** Rhythm: beat after beat the camera pulls back, turns `angle` degrees, comes back in and holds
+   *  (one beat every `beat` seconds, out by `zoom` of its distance). Turntable and rhythm exclude each other. */
+  rhythm: { on: boolean; angle: number; beat: number; zoom: number; tilt: number; roll: number; random: number; ease: 'smooth' | 'snappy' | 'float' }
+  setRhythm: (r: Partial<P['rhythm']>) => void
   /** Turntable direction: 1 counter-clockwise seen from above, -1 clockwise. */
   spinDir: 1 | -1
   setSpinDir: (d: 1 | -1) => void
@@ -165,6 +221,12 @@ interface P {
   setCycles: (c: Partial<Cycles>) => void
   stageReel: Reel
   setStageReel: (r: Partial<Reel>) => void
+  /** Pieces that move by themselves (auto targets, the tracking overlay). */
+  auto: Auto
+  setAuto: (a: Partial<Auto>) => void
+  /** Video out: seconds to record (0: one pass of the animation) and the file type. */
+  take: { sec: number; format: 'mp4' | 'webm' }
+  setTake: (t: Partial<{ sec: number; format: 'mp4' | 'webm' }>) => void
   /** Pieces that hold still instead of moving with the clock (keyed "family:variant"). */
   still: Record<string, true>
   setStill: (k: string, still: boolean) => void
@@ -205,13 +267,15 @@ interface P {
   importSaved: (json: string) => void
   /** Start clean: nothing on the view. */
   clear: () => void
+  /** Start over: nothing on the view and every motion back to rest (the clock stopped at 0). */
+  reset: () => void
 }
 
 const KEY = 'qs-present'
 const VERSION = 2   // v2: compositions start clean and are saved by name; the old presets are gone
 type Kept = Partial<P> & { v?: number; story?: Partial<Omit<Reel, 'blend'>> & { blend?: Blend | boolean } }
 // the blend was a yes or no before the wipe came
-const blendOf = (b: Blend | boolean | undefined): Blend => (b === false ? 'off' : b === true || b == null ? 'wipe' : b)
+function blendOf(b: Blend | boolean | undefined): Blend { return b === false ? 'off' : b === true || b == null ? 'wipe' : b }
 const read = (): Kept => { try { return JSON.parse(localStorage.getItem(KEY) ?? '{}') } catch { return {} } }
 const raw = read()
 // a first visit opens on the default composition (Lab's layout as laid out by hand)
@@ -226,8 +290,8 @@ const saved: Kept = raw.v === VERSION ? raw : {
 const keep = (s: P) => {
   try {
     localStorage.setItem(KEY, JSON.stringify({
-      v: VERSION, compose: s.compose, pos: s.pos, shots: s.shots, spin: s.spin, reelSec: s.reelSec, spinSpeed: s.spinSpeed,
-      cycleSec: s.cycleSec, drawer: s.drawer, looks: s.looks, cycles: s.cycles, story: s.stageReel, still: s.still, split: s.split, speed: s.speed, loop: s.loop, notes: s.notes, frame: s.frame, outSize: s.outSize, spinDir: s.spinDir, texts: s.texts, pngInk: s.pngInk, saved: s.saved, current: s.current, defaultRev: s.defaultRev, guides: s.guides, tab: s.tab, libCat: s.libCat, opened: s.opened,
+      v: VERSION, compose: s.compose, pos: s.pos, shots: s.shots, spin: s.spin, rhythm: s.rhythm, reelSec: s.reelSec, spinSpeed: s.spinSpeed,
+      cycleSec: s.cycleSec, drawer: s.drawer, looks: s.looks, cycles: s.cycles, story: s.stageReel, still: s.still, auto: s.auto, take: s.take, split: s.split, speed: s.speed, loop: s.loop, notes: s.notes, frame: s.frame, outSize: s.outSize, pad: s.pad, padGuide: s.padGuide, grade: s.grade, hudSize: s.hudSize, centred: s.centred, fps: s.fps, spinDir: s.spinDir, texts: s.texts, pngInk: s.pngInk, saved: s.saved, current: s.current, defaultRev: s.defaultRev, guides: s.guides, tab: s.tab, libCat: s.libCat, opened: s.opened,
     }))
   } catch { /* per-viewer only */ }
 }
@@ -248,12 +312,13 @@ export const usePresent = create<P>()((set, get) => {
     const s = get()
     const st = useStore.getState()
     // the whole compose: the pieces and how it plays
-    const motion: SavedMotion = { reel: { ...s.stageReel, segs: { ...s.stageReel.segs } }, still: { ...s.still }, split: { ...s.split }, speed: s.speed, loop: s.loop, slice: { of: st.sliceOf, color: st.sliceColor } }
+    const motion: SavedMotion = { reel: { ...s.stageReel, segs: { ...s.stageReel.segs }, hold: { ...s.stageReel.hold } }, still: { ...s.still }, split: { ...s.split }, speed: s.speed, loop: s.loop, slice: { of: st.sliceOf, color: st.sliceColor }, auto: { ...s.auto } }
     // and everything else that decides what is on screen
     const view: SavedView = {
       shading: st.shading, shade: { ...st.shade }, hud: { ...st.hud }, notes: s.notes,
       layers: Object.fromEntries(Object.entries(st.layers).map(([k, v]) => [k, v.visible])), cycles: { ...s.cycles },
       spin: s.spin, spinSpeed: s.spinSpeed, spinDir: s.spinDir, frame: s.frame,
+      grade: { ...s.grade }, pad: { ...s.pad }, outSize: s.outSize, hudSize: s.hudSize, rhythm: { ...s.rhythm }, fps: s.fps,
     }
     return { compose: { ...s.compose }, pos: strip(s.pos), looks: { ...s.looks }, texts: [...s.texts], guides: { ...s.guides }, motion, view }
   }
@@ -263,7 +328,7 @@ export const usePresent = create<P>()((set, get) => {
     up({ compose: { ...c.compose }, pos: withOthers(s.pos, c.pos), looks: { ...c.looks }, texts: [...c.texts], guides: c.guides ?? s.guides, current, sel: null })
     const m = c.motion
     if (m) {
-      up({ stageReel: { ...REEL, ...m.reel, segs: { ...REEL.segs, ...m.reel.segs }, blend: blendOf(m.reel.blend) }, still: { ...m.still }, split: { ...m.split }, speed: m.speed, loop: m.loop })
+      up({ stageReel: reelOf(m.reel), still: { ...m.still }, split: { ...m.split }, speed: m.speed, loop: m.loop, auto: { ...AUTO, ...m.auto } })
       if (m.slice) { st.setSliceOf(m.slice.of); st.setSliceColor(m.slice.color) }
     }
     const v = c.view
@@ -272,7 +337,14 @@ export const usePresent = create<P>()((set, get) => {
       st.setHud(v.hud)
       for (const [l, on] of Object.entries(v.layers) as [Layer, boolean][]) st.setLayer(l, { visible: on })
       up({ notes: v.notes, cycles: { ...v.cycles }, spin: v.spin, spinSpeed: v.spinSpeed, spinDir: v.spinDir })
-      if (v.frame !== get().frame) get().setFrame(v.frame)
+      // the frame as it was saved, with the pieces where they were saved (no fresh layout)
+      if (v.frame !== get().frame) up({ frame: v.frame, outSize: 0 })
+      if (v.grade) up({ grade: { ...GRADE, ...v.grade } })
+      if (v.pad) up({ pad: { ...FRAME_PAD, ...v.pad } })
+      if (v.outSize != null) up({ outSize: v.outSize })
+      if (v.hudSize != null) up({ hudSize: v.hudSize })
+      if (v.rhythm) up({ rhythm: { ...get().rhythm, ...v.rhythm } })
+      if (v.fps) up({ fps: v.fps })
     }
     set({ aim: get().aim + 1 })
   }
@@ -326,6 +398,24 @@ export const usePresent = create<P>()((set, get) => {
     setFrame: (f) => { up({ frame: f, outSize: 0 }); setTimeout(() => set({ tidyKey: get().tidyKey + 1, aim: get().aim + 1 }), 80) },
     outSize: saved.outSize ?? 0,
     setOutSize: (i) => up({ outSize: i }),
+    centred: saved.centred ?? true,
+    setCentred: (v) => { up({ centred: v }); set({ aim: get().aim + 1 }) },
+    fps: saved.fps ?? 30,
+    setFps: (v) => up({ fps: v }),
+    hudSize: saved.hudSize ?? 1,
+    setHudSize: (v) => up({ hudSize: v }),
+    pad: { ...FRAME_PAD, ...saved.pad },
+    padGuide: saved.padGuide ?? true,
+    grade: { ...GRADE, ...saved.grade },
+    setGrade: (g) => up({ grade: { ...get().grade, ...g } }),
+    setPadGuide: (v) => up({ padGuide: v }),
+    setPad: (x) => {
+      const cur = get().pad
+      // linked: whichever side moved, all four follow
+      const v = ['t', 'r', 'b', 'l'].map((k) => x[k as 't']).find((n) => n != null)
+      const next = { ...cur, ...x }
+      up({ pad: next.linked && v != null ? { ...next, t: v, r: v, b: v, l: v } : next })
+    },
     composing: false,
     setComposing: (v) => set({ composing: v, sel: v ? get().sel : null }),
     sel: null,
@@ -343,6 +433,16 @@ export const usePresent = create<P>()((set, get) => {
       // a drop selects what was dropped and stays where it fell; a click puts it in its usual place (the view
       // moves it to a free spot if that is taken)
       up({ compose, pos, sel: at ? `${family}:${id}` : s.sel })
+      // a piece that works with the cutting plane sets it sweeping up and down (the clock starts)
+      // a slicer turned on alone becomes the main plane (the Slice panel, the layer stack read its axis)
+      if (family === 'plane' && !cur.length) {
+        const ax = ({ v1: 'z', v2: 'x', v3: 'y' } as const)[id as 'v1']
+        if (ax) useStore.getState().setSlice({ axis: ax })
+      }
+      if (['plane', 'slicecard', 'scan'].includes(family)) {
+        if (get().stageReel.plane === 'off') up({ stageReel: { ...get().stageReel, plane: 'loop' } })
+        if (!get().playing) get().setPlaying(true)
+      }
     },
     removePiece: (key) => {
       const s = get()
@@ -364,7 +464,9 @@ export const usePresent = create<P>()((set, get) => {
     removeShot: (i) => up({ shots: get().shots.filter((_, j) => j !== i), shot: 0 }),
     setShot: (i) => set({ shot: i, fly: get().fly + 1 }),
     spin: saved.spin ?? false,
-    setSpin: (v) => up({ spin: v }),
+    setSpin: (v) => up(v ? { spin: true, rhythm: { ...get().rhythm, on: false } } : { spin: false }),
+    rhythm: { on: false, angle: 45, beat: 3, zoom: 0.2, tilt: 12, roll: 4, random: 0.6, ease: 'smooth', ...saved.rhythm },
+    setRhythm: (r) => { const next = { ...get().rhythm, ...r }; up(next.on ? { rhythm: next, spin: false } : { rhythm: next }) },
     reel: false,
     setReel: (v) => set({ reel: v }),
     reelSec: saved.reelSec ?? 5,
@@ -412,9 +514,13 @@ export const usePresent = create<P>()((set, get) => {
     cycles: { shading: false, light: false, backdrop: false, sec: 3, ...saved.cycles },
     setCycles: (c) => up({ cycles: { ...get().cycles, ...c } }),
     // the loop is kept under `story` (the older stage reel, off by default, is left behind)
-    stageReel: { ...REEL, ...saved.story, segs: { ...REEL.segs, ...saved.story?.segs }, blend: blendOf(saved.story?.blend) },
+    stageReel: reelOf(saved.story),
     setStageReel: (r) => up({ stageReel: { ...get().stageReel, ...r } }),
     still: saved.still ?? {},
+    auto: { ...AUTO, ...saved.auto },
+    setAuto: (a) => up({ auto: { ...get().auto, ...a } }),
+    take: { sec: 10, format: 'mp4', ...saved.take },
+    setTake: (t) => up({ take: { ...get().take, ...t } }),
     planeLive: false,
     wipe: null,
     split: { on: false, below: 'voxels', above: 'processed', ...saved.split },
@@ -481,6 +587,11 @@ export const usePresent = create<P>()((set, get) => {
     rename: (id, name) => up({ saved: get().saved.map((x) => (x.id === id ? { ...x, name } : x)) }),
     removeSaved: (id) => up({ saved: get().saved.filter((x) => x.id !== id), current: get().current === id ? null : get().current }),
     clear: () => up({ compose: {}, pos: withOthers(get().pos, {}), looks: {}, texts: [], guides: { ...get().guides, box: false, floor: false }, current: null, sel: null }),
+    reset: () => {
+      get().clear()
+      up({ still: {}, spin: false, rhythm: { ...get().rhythm, on: false }, reel: false, cycle: false, cycles: { shading: false, light: false, backdrop: false, sec: 3 }, stageReel: { ...REEL, on: false, plane: 'off' }, split: { ...get().split, on: false }, speed: 1, loop: true, auto: { ...AUTO } })
+      set({ playing: false, t0: 0, playFrom: Date.now(), seekKey: get().seekKey + 1 })
+    },
   }
 })
 

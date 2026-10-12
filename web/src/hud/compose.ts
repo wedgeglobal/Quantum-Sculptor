@@ -138,7 +138,11 @@ export function composeLayout(root: HTMLElement, onMove: (k: string, p: Placemen
     })
     .filter((b) => b.w > 0 && b.h > 0)
   const { placed, hero } = layout(boxes, view.width, view.height, reserve, pad, inset)
-  for (const q of placed) onMove(q.k, { x: q.x / view.width, y: q.y / view.height, auto: true, z: Math.abs(q.z - 1) > 0.001 ? q.z : undefined, out: q.out || undefined })
+  // one scale for every piece: when the layout had to shrink some, all take the smallest, so type and
+  // lines stay the same size across the view (each stays at its own top-left)
+  const zs = placed.filter((q) => !q.out).map((q) => q.z)
+  const z0 = zs.length ? Math.min(...zs) : 1
+  for (const q of placed) onMove(q.k, { x: q.x / view.width, y: q.y / view.height, auto: true, z: Math.abs(z0 - 1) > 0.001 ? z0 : undefined, out: q.out || undefined })
   return { hero, out: placed.filter((q) => q.out).length }
 }
 

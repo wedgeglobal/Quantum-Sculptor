@@ -1,4 +1,7 @@
 import { useMemo } from 'react'
+import { hash, useAutoCells } from './auto'
+import { usePresent } from '../present'
+import { useMarkScale } from './markScale'
 import type { CSSProperties, ReactNode } from 'react'
 import type { HudCtx, Vec3 } from './types'
 import './marks.css'
@@ -25,7 +28,7 @@ const PLANE = { z: [0, 1], x: [1, 2], y: [0, 2] } as const
 
 function Hud({ ctx, children }: { ctx: HudCtx; children: ReactNode }) {
   return (
-    <svg className="qs-hud" width={ctx.w} height={ctx.h} viewBox={`0 0 ${ctx.w} ${ctx.h}`} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'visible' }}>
+    <svg className="qs-hud qs-hud--lift" width={ctx.w} height={ctx.h} viewBox={`0 0 ${ctx.w} ${ctx.h}`} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'visible' }}>
       {children}
     </svg>
   )
@@ -39,42 +42,50 @@ function T({ x, y, c = INK, size = 11, anchor, children }: { x: number; y: numbe
   )
 }
 
-/** The hovered cell on screen: centre and a square side covering its projected cube (clamped). */
-function useCellSquare(ctx: HudCtx, min = 14, max = 64) {
-  const { hover, project } = ctx
-  return useMemo(() => {
-    if (!hover) return null
-    const [i, j, k] = hover.cell
-    const c = project([i, j, k])
-    if (!c) return null
-    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity
-    for (let b = 0; b < 8; b++) {
-      const p: Vec3 = [i + (b & 1 ? 0.5 : -0.5), j + (b & 2 ? 0.5 : -0.5), k + (b & 4 ? 0.5 : -0.5)]
-      const s = project(p)
-      if (!s) continue
-      x0 = Math.min(x0, s[0]); x1 = Math.max(x1, s[0]); y0 = Math.min(y0, s[1]); y1 = Math.max(y1, s[1])
-    }
-    const raw = Number.isFinite(x0) ? Math.max(x1 - x0, y1 - y0) : min
-    const s = Math.round(Math.min(max, Math.max(min, raw)))
-    return { cx: c[0], cy: c[1], s }
-  }, [hover, project, min, max])
+/** What a selection mark points at: the hovered cell, or (nothing hovered) a cell it picks on its own. */
+interface Aim { cx: number; cy: number; cell: Vec3; value: number | null; x: number; y: number; auto: boolean; key: string; u: number; t: number }
+function useAim(ctx: HudCtx, seed: number, hop = 1): Aim | null {
+  const auto = useAutoCells(ctx, 1, !ctx.hover, { seed, hop })
+  if (ctx.hover) {
+    const c = ctx.project(ctx.hover.cell)
+    return c ? { cx: c[0], cy: c[1], cell: ctx.hover.cell, value: ctx.hover.value, x: ctx.hover.x, y: ctx.hover.y, auto: false, key: ctx.hover.cell.join(','), u: 1, t: 0 } : null
+  }
+  const a = auto?.[0]
+  return a ? { cx: a.x, cy: a.y, cell: a.cell, value: a.value, x: a.x, y: a.y, auto: true, key: a.key, u: a.u, t: a.t } : null
 }
+
+/** A cell on screen: a square side covering its projected cube (clamped). */
+function cellSide(ctx: HudCtx, cell: Vec3, min = 14, max = 64): number {
+  const [i, j, k] = cell
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity
+  for (let b = 0; b < 8; b++) {
+    const s = ctx.project([i + (b & 1 ? 0.5 : -0.5), j + (b & 2 ? 0.5 : -0.5), k + (b & 4 ? 0.5 : -0.5)])
+    if (!s) continue
+    x0 = Math.min(x0, s[0]); x1 = Math.max(x1, s[0]); y0 = Math.min(y0, s[1]); y1 = Math.max(y1, s[1])
+  }
+  const raw = Number.isFinite(x0) ? Math.max(x1 - x0, y1 - y0) : min
+  return Math.round(Math.min(max, Math.max(min, raw)))
+}
+
+/** While gliding to a new cell the mark opens up a little and settles as it arrives. */
+const morph = (a: Aim, s: number) => (a.auto ? s * (1 + 0.6 * Math.sin(Math.PI * Math.min(1, a.u))) : s)
 
 /* ── v1 · square + tab ──────────────────────────────────────────────────────── */
 
 export function SquareTab({ ctx }: { ctx: HudCtx }) {
-  const sq = useCellSquare(ctx, 16)
-  if (!sq || !ctx.hover) return null
-  const { cx, cy, s } = sq
-  const x0 = Math.round(cx - s / 2), y0 = Math.round(cy - s / 2)
+  const a = useAim(ctx, 1)
+  const sc = useMarkScale()
+  if (!a) return null
+  const s = Math.round(morph(a, cellSide(ctx, a.cell, 16 * sc, 64 * sc)))
+  const x0 = Math.round(a.cx - s / 2), y0 = Math.round(a.cy - s / 2)
   const ax = ctx.slice.axis
-  const label = `${ax} ${ctx.hover.cell[AI[ax]]}`
-  const tw = label.length * 6 + 10
+  const label = `${ax} ${a.cell[AI[ax]]}`
+  const fs = 10 * sc, tw = label.length * fs * 0.6 + 8 * sc, th = 14 * sc
   return (
     <Hud ctx={ctx}>
-      <rect x={x0 + 0.75} y={y0 + 0.75} width={s - 1.5} height={s - 1.5} strokeWidth={1.5} style={stroke(INK)} />
-      <rect x={x0} y={y0 - 16} width={tw} height={16} style={{ fill: INK }} />
-      <text x={x0 + 5} y={y0 - 7.5} fontSize={11} dominantBaseline="central" style={{ fill: BG, fontFamily: MONO }}>
+      <rect x={x0 + 0.5} y={y0 + 0.5} width={s - 1} height={s - 1} strokeWidth={1} style={stroke(INK)} />
+      <rect x={x0} y={y0 - th} width={tw} height={th} style={{ fill: INK }} />
+      <text x={x0 + 4 * sc} y={y0 - th / 2} fontSize={fs} dominantBaseline="central" style={{ fill: BG, fontFamily: MONO }}>
         {label}
       </text>
     </Hud>
@@ -84,18 +95,21 @@ export function SquareTab({ ctx }: { ctx: HudCtx }) {
 /* ── v2 · lock-on ───────────────────────────────────────────────────────────── */
 
 export function LockOn({ ctx }: { ctx: HudCtx }) {
-  const sq = useCellSquare(ctx, 20)
-  if (!sq || !ctx.hover) return null
-  const { cx, cy, s } = sq
+  const a = useAim(ctx, 2, 1.25)
+  const sc = useMarkScale()
+  if (!a) return null
+  const { cx, cy } = a
+  const s = cellSide(ctx, a.cell, 20 * sc, 64 * sc)
   const l = cx - s / 2, r = cx + s / 2, t = cy - s / 2, b = cy + s / 2
-  const L = Math.max(5, Math.min(12, s / 3))
+  const L = Math.max(5 * sc, Math.min(12 * sc, s / 3))
   const d = `M${f(l)} ${f(t + L)}V${f(t)}H${f(l + L)}M${f(r - L)} ${f(t)}H${f(r)}V${f(t + L)}M${f(r)} ${f(b - L)}V${f(b)}H${f(r - L)}M${f(l + L)} ${f(b)}H${f(l)}V${f(b - L)}`
   return (
     <Hud ctx={ctx}>
-      {/* keyed on the cell, so each newly hovered cell replays the 240 ms close-in */}
-      <g key={ctx.hover.cell.join(',')} className="qs-hud-anim qs-hud-lock" style={{ transformOrigin: `${f(cx)}px ${f(cy)}px` }}>
-        <path d={d} strokeWidth={1.5} style={stroke(INK)} />
+      {/* keyed on the cell, so each new cell replays the close-in (turning a quarter on its own) */}
+      <g key={a.key} className={'qs-hud-anim ' + (a.auto ? 'qs-hud-lock qs-hud-lock--turn' : 'qs-hud-lock')} style={{ transformOrigin: `${f(cx)}px ${f(cy)}px` }}>
+        <path d={d} strokeWidth={1} style={stroke(INK)} />
       </g>
+      {a.auto && a.value != null && <T x={r + 8 * sc} y={t + 4 * sc} c={INK3} size={9 * sc}>{a.value.toFixed(3)}</T>}
     </Hud>
   )
 }
@@ -103,24 +117,29 @@ export function LockOn({ ctx }: { ctx: HudCtx }) {
 /* ── v3 · target ────────────────────────────────────────────────────────────── */
 
 export function Target({ ctx }: { ctx: HudCtx }) {
-  const sq = useCellSquare(ctx, 22, 48)
-  if (!sq || !ctx.hover) return null
-  const { cx, cy, s } = sq
-  const h = s / 2, G = 6, L = 12
-  const x = Math.round(cx) + 0.5, y = Math.round(cy) + 0.5
-  const d = `M${x} ${f(cy - h - G - L)}v${L}M${x} ${f(cy + h + G)}v${L}M${f(cx - h - G - L)} ${y}h${L}M${f(cx + h + G)} ${y}h${L}`
+  const a = useAim(ctx, 3, 1.5)
+  const sc = useMarkScale()
+  if (!a) return null
+  const { cx, cy } = a
+  const s = morph(a, cellSide(ctx, a.cell, 22 * sc, 48 * sc))
+  const h = s / 2, G = 6 * sc, L = 12 * sc
+  const d = `M0 ${f(-h - G - L)}v${L}M0 ${f(h + G)}v${L}M${f(-h - G - L)} 0h${L}M${f(h + G)} 0h${L}`
   const ax = ctx.slice.axis
   const [ua, va] = PLANE[ax]
-  const cell = ctx.hover.cell
+  const cell = a.cell
   const flip = cx + h + 24 + 110 > ctx.w
   const tx = flip ? cx - h - 24 : cx + h + 24
   const anchor = flip ? 'end' : 'start'
+  // on its own, the cross-hair turns slowly as it tracks
+  const turn = a.auto ? (a.t * 24) % 360 : 0
   return (
     <Hud ctx={ctx}>
-      <rect x={Math.round(cx - h) + 0.5} y={Math.round(cy - h) + 0.5} width={s - 1} height={s - 1} strokeWidth={1} style={stroke(INK)} />
-      <path d={d} strokeWidth={1} style={stroke(INK)} />
-      <T x={tx} y={cy - h - 4} anchor={anchor}>{`${AX[ua]} ${cell[ua]} · ${AX[va]} ${cell[va]}`}</T>
-      <T x={tx} y={cy - h + 12} c={INK3} size={10} anchor={anchor}>{`${ax} ${cell[AI[ax]]}`}</T>
+      <g transform={`translate(${f(cx)} ${f(cy)}) rotate(${f(turn)})`}>
+        <rect x={f(-h)} y={f(-h)} width={f(s)} height={f(s)} strokeWidth={1} style={stroke(INK)} />
+        <path d={d} strokeWidth={1} style={stroke(INK)} />
+      </g>
+      <T x={tx} y={cy - h - 4} size={10 * sc} anchor={anchor}>{`${AX[ua]} ${cell[ua]} · ${AX[va]} ${cell[va]}`}</T>
+      <T x={tx} y={cy - h + 11 * sc} c={INK3} size={9 * sc} anchor={anchor}>{`${ax} ${cell[AI[ax]]}`}</T>
     </Hud>
   )
 }
@@ -131,7 +150,8 @@ export function Target({ ctx }: { ctx: HudCtx }) {
 const K = 5, C = 14, GRID = K * C
 
 export function CellInSlice({ ctx }: { ctx: HudCtx }) {
-  const { hover, n, w, h } = ctx
+  const { n, w, h } = ctx
+  const hover = useAim(ctx, 4, 1.25)
   if (!hover || n <= 0) return null
   const ax = ctx.slice.axis
   const [ua, va] = PLANE[ax]
@@ -154,6 +174,38 @@ export function CellInSlice({ ctx }: { ctx: HudCtx }) {
       <path d={lines} strokeWidth={1} style={stroke(INK4)} />
       <rect x={gx + col * C} y={gy + row * C} width={C + 1} height={C + 1} style={{ fill: INK }} />
       <T x={gx} y={gy - 7} c={INK2} size={10}>{`${ax} ${hover.cell[AI[ax]]}`}</T>
+    </Hud>
+  )
+}
+
+/* ── v5 · tracking ──────────────────────────────────────────────────────────── */
+
+/** Blob tracking: boxes on cells of the object, each with its value, joined in order by hairlines;
+ *  they let go and pick new cells one after another. */
+export function Tracking({ ctx }: { ctx: HudCtx }) {
+  const auto = usePresent((p) => p.auto)
+  const sc = useMarkScale()
+  const cells = useAutoCells(ctx, auto.boxes, true, { seed: 5, hop: 2.2 })
+  const boxes = useMemo(() => (cells ?? []).map((c, i) => {
+    // a size of its own per pick, opening as it arrives
+    const r = hash(i, c.cell[0] * 4096 + c.cell[1] * 64 + c.cell[2])
+    const side = (34 + r * 70) * sc * (0.82 + 0.18 * Math.min(1, c.u * 1.4))
+    return { ...c, side, i }
+  }), [cells, sc])
+  if (!boxes.length) return null
+  const links = auto.links ? boxes.map((b) => `${f(b.x)},${f(b.y)}`).join(' ') : ''
+  return (
+    <Hud ctx={ctx}>
+      {links && <polyline points={links} strokeWidth={0.75} style={stroke(INK2)} />}
+      {boxes.map((b) => {
+        const x = Math.round(b.x - b.side / 2) + 0.5, y = Math.round(b.y - b.side / 2) + 0.5
+        return (
+          <g key={b.i} opacity={0.35 + 0.65 * Math.min(1, b.u * 2)}>
+            <rect x={x} y={y} width={f(b.side)} height={f(b.side)} strokeWidth={1} style={stroke(INK)} />
+            <T x={b.x} y={b.y + 3.5 * sc} size={10 * sc} anchor="middle">{b.value.toFixed(4)}</T>
+          </g>
+        )
+      })}
     </Hud>
   )
 }

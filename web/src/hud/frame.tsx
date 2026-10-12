@@ -4,6 +4,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import type { HudCtx } from './types'
 import './lab.css'
+import { useMarkScale } from './markScale'
 
 const INSET = 28
 const n1 = (v: number) => Math.round(v * 2) / 2
@@ -25,8 +26,7 @@ function Layer({ ctx, children }: { ctx: HudCtx; children: ReactNode }) {
 }
 
 /** 4px square dots along all four edges, inset; corners left to the brackets. */
-function edgeDots(w: number, h: number, step: number, inset: number, color: string, skip = 60): ReactNode {
-  const s = 4
+function edgeDots(w: number, h: number, step: number, inset: number, color: string, skip = 60, s = 4): ReactNode {
   const out: ReactNode[] = []
   const xs = spread(inset + skip, w - inset - skip, step)
   const ys = spread(inset + skip, h - inset - skip, step)
@@ -60,11 +60,12 @@ const stroke = (c: string, extra?: CSSProperties): CSSProperties => ({ fill: 'no
 
 export function Registration({ ctx }: { ctx: HudCtx }) {
   const { w, h } = ctx
+  const sc = useMarkScale()
   let d = ''
-  for (const fx of [1 / 3, 2 / 3]) for (const fy of [1 / 3, 2 / 3]) d += cross(w * fx, h * fy, 5)
+  for (const fx of [1 / 3, 2 / 3]) for (const fy of [1 / 3, 2 / 3]) d += cross(w * fx, h * fy, 5 * sc)
   return (
     <Layer ctx={ctx}>
-      {edgeDots(w, h, 64, INSET, 'var(--qs-ink3)')}
+      {edgeDots(w, h, 64, INSET, 'var(--qs-ink3)', 60, 4 * sc)}
       <path d={d} shapeRendering="crispEdges" style={stroke('var(--qs-ink3)')} />
     </Layer>
   )
@@ -72,10 +73,11 @@ export function Registration({ ctx }: { ctx: HudCtx }) {
 
 export function Brackets({ ctx }: { ctx: HudCtx }) {
   const { w, h } = ctx
+  const sc = useMarkScale()
   return (
     <Layer ctx={ctx}>
-      <path d={brackets(w, h, INSET, 16)} shapeRendering="crispEdges" style={stroke('var(--qs-ink)')} />
-      <path d={cross(w / 2, h / 2, 11)} shapeRendering="crispEdges" style={stroke('var(--qs-ink3)')} />
+      <path d={brackets(w, h, INSET, 16 * sc)} shapeRendering="crispEdges" style={stroke('var(--qs-ink)')} />
+      <path d={cross(w / 2, h / 2, 11 * sc)} shapeRendering="crispEdges" style={stroke('var(--qs-ink3)')} />
     </Layer>
   )
 }

@@ -10,6 +10,10 @@ export const MotionCtx = createContext(true)
 /** True when this piece moves with the clock (the default). */
 export const useMoves = () => useContext(MotionCtx)
 
+/** The clock is paused part way through a pass: everything that moves holds where it is. Before the
+ *  first Play (the clock at 0) pieces move on their own, so they can be seen. */
+export const useFrozen = () => usePresent((p) => !p.playing && p.t0 > 0)
+
 /** True while this piece holds still: it doesn't move, and the clock is engaged. */
 export function useHolding(): boolean {
   const moves = useContext(MotionCtx)
@@ -27,7 +31,21 @@ export function useHeld<T>(v: T): T {
   return hold && held ? held.v : v
 }
 
-/** Pieces with something to animate: everything placed beside the object. Marks drawn on the object
- *  itself (frames, bounds, focus, callouts) follow it as it is, so they have no switch. */
-export const animatable = (m: Pick<HudModule, 'family' | 'slot'>) =>
-  m.slot !== 'object' && m.slot !== 'full' && m.family !== 'frame'
+/** Pieces with something to animate: all but the frame marks (registration, brackets). The cutting
+ *  plane's switch is its sweep. */
+export const animatable = (m: Pick<HudModule, 'family' | 'slot'>) => m.family !== 'frame'
+
+/** A piece's motion switch: the cutting plane sweeps or holds; any other piece moves with the clock or
+ *  holds what it shows. */
+export function toggleMotion(m: Pick<HudModule, 'family' | 'id'>) {
+  const p = usePresent.getState()
+  if (m.family === 'plane') {
+    const on = p.stageReel.plane === 'off'
+    p.setStageReel({ plane: on ? 'loop' : 'off' })
+    if (on && !p.playing) p.setPlaying(true)
+    return
+  }
+  const k = `${m.family}:${m.id}`
+  p.setStill(k, !p.still[k])
+}
+

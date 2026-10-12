@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { HudCtx, Vec3 } from './types'
 import './marks.css'
+import { useMarkScale } from './markScale'
 
 /*
  * Bounds — the grid volume and the print size (QLMarks4 › Bounds).
@@ -47,11 +48,12 @@ const mmText = (v: number) => (v >= 100 ? v.toFixed(0) : v.toFixed(v >= 10 ? 0 :
 
 /* ── v1 · corners in 3D ─────────────────────────────────────────────────────── */
 
-const ARM = 0.06 // fraction of each edge
-const ARM_MIN = 7, ARM_MAX = 24 // px
+const ARM = 0.045 // fraction of each edge
+const ARM_MIN = 4, ARM_MAX = 12 // px
 
 export function Corners3D({ ctx }: { ctx: HudCtx }) {
   const { box, project } = ctx
+  const sc = useMarkScale()
   const geo = useMemo(() => {
     if (!box) return null
     const { min, max } = box
@@ -67,35 +69,36 @@ export function Corners3D({ ctx }: { ctx: HudCtx }) {
         if (len[a] <= 0) continue
         const nb = pts[b ^ (1 << a)]
         const q: Vec3 = [p[0], p[1], p[2]]
-        q[a] += (nb.p[a] - p[a]) * ARM
+        q[a] += (nb.p[a] - p[a]) * ARM * sc
         const e = project(q)
         if (!e) continue
         let dx = e[0] - sx, dy = e[1] - sy
         const L = Math.hypot(dx, dy)
-        score += L / (len[a] * ARM) // px per grid unit: larger = nearer the camera
+        score += L / (len[a] * ARM * sc) // px per grid unit: larger = nearer the camera
         if (L < 1e-3) continue
-        const k = Math.min(ARM_MAX, Math.max(ARM_MIN, L)) / L
+        const k = Math.min(ARM_MAX * sc, Math.max(ARM_MIN * sc, L)) / L
         dx *= k
         dy *= k
         d += `M${f(sx)} ${f(sy)}L${f(sx + dx)} ${f(sy + dy)}`
       }
-      return { d, score }
+      return { d, score, x: sx, y: sy }
     })
     // The farthest corner (smallest perspective scale) sits behind the volume: grey.
     let far = 0
     corners.forEach((c, i) => {
       if (c.score < corners[far].score) far = i
     })
-    return {
-      front: corners.filter((_, i) => i !== far).map((c) => c.d).join(''),
-      back: corners[far].d,
-    }
-  }, [box, project])
+    return corners.map((c, i) => ({ ...c, back: i === far }))
+  }, [box, project, sc])
   if (!geo) return null
+  // each corner draws in, one after another round the box
   return (
     <Hud ctx={ctx}>
-      <path d={geo.back} strokeWidth={1} style={stroke(INK3)} />
-      <path d={geo.front} strokeWidth={1} style={stroke(INK)} />
+      {geo.map((c, i) => (
+        <g key={i} className="qs-hud-anim qs-hud-corner" style={{ transformOrigin: `${f(c.x)}px ${f(c.y)}px`, animationDelay: `${i * 60}ms` }}>
+          <path d={c.d} strokeWidth={0.75} strokeLinecap="square" style={stroke(c.back ? INK4 : INK)} />
+        </g>
+      ))}
     </Hud>
   )
 }

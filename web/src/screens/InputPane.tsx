@@ -14,6 +14,7 @@ import { Spinner } from './parts'
 import { fmt } from './fmt'
 import { MODEL_EXT } from './modelExt'
 import { RunBar } from './RunBar'
+import { FINISHES, finishOf, setFinish, type Finish } from './finish'
 import { ShapePicker } from './Shapes'
 
 type Step = 'model' | 'voxels' | 'quantum' | 'mesh'
@@ -119,14 +120,14 @@ function VoxIn() {
         <Slider label="Padding" value={vox.pad} min={0} max={6} step={1} format={(v) => `${v} cells`} onChange={(v) => st.setVox({ pad: v })} help="Empty cells kept around the model." />
       </Panel>
       <Panel id="in-vox-fill" title="Fill">
-        <Select<Fill> label="Inside" value={vox.fill} onChange={(v) => st.setVox({ fill: v })} options={[
-          { value: 'holes', label: 'Fill enclosed' },
-          { value: 'capped', label: 'Cap, then fill' },
-          { value: 'none', label: 'Shell only' },
-        ]} help="How the inside is filled. Cap first for scans that are open underneath." />
-        <Select<Values> label="Cell values" value={vox.values} onChange={(v) => st.setVox({ values: v })}
-          options={[{ value: 'coverage', label: 'Coverage' }, { value: 'binary', label: '0 or 1' }]}
-          help="Coverage stores how much of each cell the model occupies, so 0.5 is the true surface. 0 or 1 comes out about half a voxel fat." />
+        <Row label="Inside" tip="How the inside is filled. Cap first for scans that are open underneath.">
+          <Segmented<Fill> size="s" value={vox.fill} onChange={(v) => st.setVox({ fill: v })} aria-label="Inside"
+            options={[{ value: 'holes', label: 'Solid' }, { value: 'capped', label: 'Cap, then fill' }, { value: 'none', label: 'Shell' }]} />
+        </Row>
+        <Row label="Cell values" tip="Coverage stores how much of each cell the model occupies, so 0.5 is the true surface. 0 or 1 comes out about half a voxel fat.">
+          <Segmented<Values> size="s" value={vox.values} onChange={(v) => st.setVox({ values: v })} aria-label="Cell values"
+            options={[{ value: 'coverage', label: 'Coverage' }, { value: 'binary', label: '0 or 1' }]} />
+        </Row>
       </Panel>
     </>
   )
@@ -188,9 +189,10 @@ export function QuantumIn() {
             </Panel>
           </Panel>
           <Panel id="in-q-circuit" title="Circuit" defaultOpen={false}>
-            <Select label="Gate style" value={q.style} onChange={(v) => st.setQ({ style: v })} options={[
-              { value: 'x', label: 'x · Rx' }, { value: 'y', label: 'y · Ry' }, { value: 'xy', label: 'xy · Rx, Ry' }, { value: 'yx', label: 'yx · Ry, Rx' },
-            ]} />
+            <Row label="Gates" tip="Which rotation each qubit gets: Rx, Ry, or both in either order.">
+              <Segmented size="s" value={q.style} onChange={(v) => st.setQ({ style: v })} aria-label="Gate style"
+                options={[{ value: 'x', label: 'Rx' }, { value: 'y', label: 'Ry' }, { value: 'xy', label: 'Rx Ry' }, { value: 'yx', label: 'Ry Rx' }]} />
+            </Row>
             <Input label="Shots" type="number" value={q.shots ?? ''} placeholder="exact" min={1} step={1000} onChange={(v) => st.setQ({ shots: v ? Math.max(1, +v) : null })} help="Leave empty for the exact state." />
             <Row label="Axes">
               <AxisToggle value={q.axes.map((a) => 'xyz'[a] as 'x' | 'y' | 'z')} onChange={(v) => { if (v.length) st.setQ({ axes: v.map((a) => 'xyz'.indexOf(a)).sort() }) }} />
@@ -258,48 +260,82 @@ function EvolveIn() {
 }
 
 // ── 04 mesh ──────────────────────────────────────────────────────────────────────────────────────
-const FILTERS: { value: VFilter; label: string }[] = [
-  { value: 'none', label: 'None' }, { value: 'gaussian', label: 'Gaussian' }, { value: 'mean', label: 'Mean' },
-  { value: 'median', label: 'Median' }, { value: 'curvature', label: 'Laplacian flow' },
+const SMOOTHERS: { value: VFilter; label: string }[] = [
+  { value: 'none', label: 'None' }, { value: 'gaussian', label: 'Gaussian' }, { value: 'curvature', label: 'Laplacian' }, { value: 'median', label: 'Median' },
 ]
+const SMOOTH_HELP: Record<VFilter, string> = {
+  none: 'The surface follows the cells exactly: stepped, with the grid showing.',
+  gaussian: 'Blurs the volume before the surface is taken: rounds steps and small bumps evenly.',
+  mean: 'Averages each cell with its neighbours: like Gaussian, a little boxier.',
+  median: 'Keeps edges, removes single-cell specks and pits.',
+  curvature: 'Laplacian (mean-curvature) flow: sharp ridges and spikes melt first, flat areas barely move.',
+}
 const FIELDS: { value: FieldKind; label: string }[] = [
   { value: 'threshold', label: 'Toward the result' },
   { value: 'difference', label: 'Amplify difference' },
   { value: 'gradient', label: 'Along the gradient' },
 ]
+/** Errors that come from the surface settings, so the Mesh step can offer the way back. */
+const SURFACE_ERR = /surface vanished|outside the data range|No cells at or above/
 
+/** 04 Mesh, in the order you decide it: how the surface is made, how smooth it is, its shape, then print. */
 function MeshIn() {
   const st = useStore()
   const { m, grid } = st
   const n = grid?.n ?? 32
+  const push = m.method === 'advect'
+  const failed = st.error && SURFACE_ERR.test(st.error) ? st.error : null
+  const finish = finishOf(st)
+  const skipped = st.report?.skipped ?? []
   return (
     <>
-      <Panel id="in-mesh-surface" title="Surface" aside={`${m.method === 'advect' ? 'push' : 'threshold'} ${fmt.f2(m.level)}`}>
-        <Slider label="Level" value={m.level} min={0.05} max={0.95} step={0.01} defaultValue={0.5} onChange={(v) => st.setM({ level: v })}
-          help="Relative to the original solid (1). Lower swells and fuses; higher erodes." />
-        <Row label="From">
-          <Segmented size="s" options={[{ value: 'threshold', label: 'Threshold' }, { value: 'advect', label: 'Push' }]}
-            value={m.method} onChange={(v) => st.setM({ method: v as 'threshold' | 'advect' })} aria-label="Surface from" />
+      <Panel id="in-mesh-finish" title="Finish" aside={finish}>
+        <Segmented<Finish> size="s" options={FINISHES} value={finish} onChange={setFinish} aria-label="Finish" />
+        <Note>{FINISHES.find((x) => x.value === finish)!.d}</Note>
+        {skipped.length > 0 && <Note warn>{`Skipped ${skipped.map((x) => (x === 'smooth' ? 'the volume smoothing' : x === 'close' ? 'closing gaps' : 'thicken / shrink')).join(' and ')}: the walls are too thin for it, it would erase them. Shown without it.`}</Note>}
+      </Panel>
+      <Panel id="in-mesh-surface" title="Surface" aside={push ? `push ${m.amount}` : `level ${fmt.f2(m.level)}`}>
+        <Row label="Make it by">
+          <Segmented size="s" options={[{ value: 'threshold', label: 'Cut result' }, { value: 'advect', label: 'Push model' }]}
+            value={m.method} onChange={(v) => st.setM({ method: v as 'threshold' | 'advect' })} aria-label="Make the surface by" />
         </Row>
-        {m.method === 'advect' && (
+        <Note>{push
+          ? 'Starts from the original model’s skin and moves it in or out by the quantum result, so the model’s own detail survives.'
+          : 'Keeps every cell of the quantum result at or above the level and wraps a skin round them. Fast; detail comes from the result alone.'}</Note>
+        {push && (
           <>
-            <Slider label="Push" value={m.amount} min={0} max={8} step={0.25} format={(v) => `${v} cells`} onChange={(v) => st.setM({ amount: v })} help="How far the quantum result moves the surface, in quantum cells." />
-            <Select<FieldKind> label="Field" value={m.field} options={FIELDS} onChange={(v) => st.setM({ field: v })} />
+            <Slider label="Push" value={m.amount} min={0} max={8} step={0.25} format={(v) => `${v} cells`} onChange={(v) => st.setM({ amount: v })} help="How far the result may move the skin, in quantum cells. Too far and the shape can vanish." />
+            <Select<FieldKind> label="Push toward" value={m.field} options={FIELDS} onChange={(v) => st.setM({ field: v })} />
           </>
         )}
-        <Select label="Refine" value={String(m.refine)} onChange={(v) => st.setM({ refine: +v })}
-          options={[1, 2, 4, 8].filter((r) => n * r <= 256).map((r) => ({ value: String(r), label: r === 1 ? '×1 · quantum grid' : `×${r} · ${n * r}³` }))} />
+        {(!push || m.field === 'threshold') && (
+          <Slider label="Level" value={m.level} min={0.05} max={0.95} step={0.01} defaultValue={0.5} onChange={(v) => st.setM({ level: v })}
+            help="Where the skin sits in the result’s values (0–1). 0.5 matches the original solid; lower swells and fuses, higher thins and erodes." />
+        )}
+        {failed && (
+          <>
+            <Note warn>{failed}</Note>
+            <Buttons><Button onClick={() => st.setM({ level: 0.5, amount: Math.min(m.amount, 2), grow: 0, close: 0 })}>Back to safe settings</Button></Buttons>
+          </>
+        )}
       </Panel>
-      <Panel id="in-mesh-vox" title="Voxel operations" defaultOpen={false}>
-        <Select<VFilter> label="Smooth" value={m.vfilter} options={FILTERS} onChange={(v) => st.setM({ vfilter: v })} />
-        <Slider label="Width" value={m.vwidth} min={0.5} max={4} step={0.25} disabled={m.vfilter === 'none'} onChange={(v) => st.setM({ vwidth: v })} />
-        <Slider label="Thicken" value={m.grow} min={-4} max={4} step={0.25} origin={0} defaultValue={0} onChange={(v) => st.setM({ grow: v })} help="Positive thickens, negative shrinks, in voxels." />
-        <Slider label="Close gaps" value={m.close} min={0} max={4} step={0.5} defaultValue={0} onChange={(v) => st.setM({ close: v })} />
+      <Panel id="in-mesh-smooth" title="Smoothness" aside={`×${m.refine}${m.vfilter !== 'none' ? ' · ' + m.vfilter : ''}`}>
+        <Row label="Detail" tip="Builds the skin on a finer grid: each step has 8× the cells, rounder curves and takes longer.">
+          <Segmented size="s" options={[1, 2, 4, 8].filter((r) => n * r <= 256).map((r) => ({ value: String(r), label: `×${r}` }))} value={String(m.refine)} onChange={(v) => st.setM({ refine: +v })} aria-label="Detail" />
+        </Row>
+        <Row label="Smooth the volume">
+          <Segmented<VFilter> size="s" options={SMOOTHERS} value={m.vfilter === 'mean' ? 'gaussian' : m.vfilter} onChange={(v) => st.setM({ vfilter: v })} aria-label="Smooth the volume" />
+        </Row>
+        <Note>{SMOOTH_HELP[m.vfilter]}</Note>
+        {m.vfilter !== 'none' && <Slider label="Amount" value={m.vwidth} min={0.5} max={4} step={0.25} format={(v) => `${v} cells`} onChange={(v) => st.setM({ vwidth: v })} />}
+        <Slider label="Polish the mesh" value={m.smooth} min={0} max={30} step={1} defaultValue={5} format={(v) => (v ? `${v} passes` : 'off')} onChange={(v) => st.setM({ smooth: v })}
+          help="Taubin smoothing on the finished triangles: evens out facets without shrinking the shape." />
       </Panel>
-      <Panel id="in-mesh-mesh" title="Mesh" defaultOpen={false}>
-        <Slider label="Smoothing" value={m.smooth} min={0} max={30} step={1} defaultValue={5} format={(v) => `${v} passes`} onChange={(v) => st.setM({ smooth: v })} />
+      <Panel id="in-mesh-vox" title="Shape" defaultOpen={false} aside={m.grow || m.close ? 'changed' : undefined}>
+        <Slider label="Thicken" value={m.grow} min={-4} max={4} step={0.25} origin={0} defaultValue={0} format={(v) => `${v > 0 ? '+' : ''}${v} cells`} onChange={(v) => st.setM({ grow: v })} help="Positive thickens the whole shape, negative thins it." />
+        <Slider label="Close gaps" value={m.close} min={0} max={4} step={0.5} defaultValue={0} format={(v) => (v ? `${v} cells` : 'off')} onChange={(v) => st.setM({ close: v })} help="Fills slots and holes narrower than this; elsewhere the shape stays." />
         <Row label="Keep">
-          <Segmented size="s" options={[{ value: 'largest', label: 'Largest' }, { value: 'all', label: 'All large' }]} value={m.keep} onChange={(v) => st.setM({ keep: v as 'largest' | 'all' })} aria-label="Fragments" />
+          <Segmented size="s" options={[{ value: 'largest', label: 'Largest piece' }, { value: 'all', label: 'All large pieces' }]} value={m.keep} onChange={(v) => st.setM({ keep: v as 'largest' | 'all' })} aria-label="Fragments" />
         </Row>
       </Panel>
       <Panel id="in-mesh-print" title="Print">

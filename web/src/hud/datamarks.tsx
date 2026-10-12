@@ -8,6 +8,7 @@ import type { CSSProperties, ErrorInfo, ReactNode, PointerEvent as RPointerEvent
 import { histogram, section, type Axis } from '../qs/grid'
 import type { HudCtx } from './types'
 import { useNow } from '../useNow'
+import { useFrozen, useHolding, useMoves } from './motion'
 import { Count } from './Num'
 import './datamarks.css'
 
@@ -398,7 +399,7 @@ export function Density({ ctx }: { ctx: HudCtx }) {
   }
   const hx = hb != null ? (hb + 0.5) * bw : 0
   return (
-    <Box title="Density" right={<>level <N>{f2(L)}</N> · keeps <N>{int(kept)}</N> cells{solid ? <> · <N>{Math.round((kept / solid) * 100)}%</N></> : null}</>} w={W}>
+    <Box title="Density" right={<><N>{f2(L)}</N> · <N>{int(kept)}</N>{solid ? <> · <N>{Math.round((kept / solid) * 100)}%</N></> : null}</>} w={W}>
       <div ref={plot} className={'qdm-plot' + (held != null ? ' qdm-plot--held' : '')} style={{ width: W, height: H }}
         onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onPointerLeave={() => held == null && setHb(null)}>
         <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ position: 'absolute', inset: 0 }}>
@@ -556,7 +557,7 @@ export function Steps({ ctx }: { ctx: HudCtx }) {
   const cursor = at(end)
   const span = Math.max(1, cursor)
   return (
-    <Box title="Steps" right={<><N>{dur(busy / 1000)}</N> working</>} w={300}>
+    <Box title="Steps" right={<N>{dur(busy / 1000)}</N>} w={300}>
       <div className="qdm-gantt">
         {rows.map((r, i) => (
           <div key={i} className="qdm-gantt__row">
@@ -573,20 +574,40 @@ export function Steps({ ctx }: { ctx: HudCtx }) {
   )
 }
 
+/** The runtime log, read as a live terminal: the newest line types itself out after a blinking cursor.
+ *  When nothing new has come in for a few seconds it replays this session's own log from the top, a
+ *  line at a time at a working pace, so a still pipeline still reads as a running one. */
 export function LogList({ ctx }: { ctx: HudCtx }) {
-  const lines = ctx.log.slice(-7)
-  if (!lines.length) return <Box title="Log" w={300}><Empty>Nothing logged yet.</Empty></Box>
+  const moves = useMoves(), hold = useHolding(), frozen = useFrozen()
+  const now = useNow(moves && !hold && !frozen, 50)
+  const all = ctx.log.slice(-240)
+  if (!all.length) return <Box title="Log" w={300}><Empty>Nothing logged yet.</Empty></Box>
+  const last = all[all.length - 1]
+  const live = now - last.t < 3000 || all.length <= 7 || !moves
+  // the replay: about 0.6 s a line, a little uneven, round and round
+  const beat = (i: number) => 0.35 + 0.5 * ((Math.sin(i * 91.7) * 43758.5453) % 1 + 1) % 1
+  let cursor = all.length - 1, typed = 1
+  if (!live) {
+    const lap = all.reduce((sum, _, i) => sum + beat(i), 0)
+    let left = (now / 1000) % lap
+    for (let i = 0; i < all.length; i++) { const d = beat(i); if (left < d) { cursor = i; typed = Math.min(1, (left / d) * 2.5); break } left -= d }
+  } else {
+    typed = Math.min(1, (now - last.t) / 450)
+  }
+  const lines = all.slice(Math.max(0, cursor - 6), cursor + 1)
   return (
     <Box title="Log" right={<><N>{int(ctx.log.length)}</N> lines</>} w={300}>
       <div className="qdm-log">
         {lines.map((l, i) => {
           const lv = l.level ?? 'info'
           const text = lv === 'net' ? l.text.trim().replace(/\s{2,}/g, ' · ') : l.text
+          const newest = i === lines.length - 1
+          const shown = newest ? text.slice(0, Math.max(1, Math.round(text.length * typed))) : text
           return (
-            <div key={`${l.t}-${i}`} className={'qdm-log__row' + (i === lines.length - 1 ? ' qdm-log__row--new' : '')}>
+            <div key={`${l.t}-${cursor - lines.length + 1 + i}`} className={'qdm-log__row' + (newest ? ' qdm-log__row--new' : '')}>
               <span>{clock(l.t)}</span>
               <span className={'qdm-log__lv' + (lv === 'warn' || lv === 'error' ? ' qdm-log__lv--hi' : '')}>{lv}</span>
-              <span title={l.text}>{text}</span>
+              <span title={l.text}>{shown}{newest && <i className="qdm-log__caret" aria-hidden />}</span>
             </div>
           )
         })}
@@ -616,7 +637,7 @@ export function RunsTable({ ctx }: { ctx: HudCtx }) {
   })
   if (!rows.length) return <Box title="Runs" w={300}><Empty>No runs yet.</Empty></Box>
   return (
-    <Box title="Runs" right={<><N>{ctx.runs.length || rows.length}</N> this session</>} w={300}>
+    <Box title="Runs" right={<N>{ctx.runs.length || rows.length}</N>} w={300}>
       <div className="qdm-runs">
         <div className="qdm-runs__row qdm-runs__row--head"><span>Run</span><span>Mode</span><span>Grid</span><span>Level</span><span>Time</span><span>Cache</span></div>
         {rows.map((r) => (
@@ -1158,7 +1179,7 @@ export function Sweep({ ctx }: { ctx: HudCtx }) {
   if (!g || !masks || !suf) return <Box title="Level sweep" w={width}><Empty>No quantum result yet.</Empty></Box>
   const cur = levels.reduce((b, l) => (Math.abs(l - level) < Math.abs(b - level) ? l : b), levels[0])
   return (
-    <Box title="Level sweep" sub="one field, five thresholds" right="sample counts" w={width}>
+    <Box title="Level sweep" w={width}>
       <div className="qdm-sweep">
         {levels.map((l, i) => {
           const on = l === cur
@@ -1176,9 +1197,9 @@ export function Sweep({ ctx }: { ctx: HudCtx }) {
                 )}
               </div>
               <div className={'qdm-sweep__lv' + (on ? ' qdm-sweep__lv--on' : '')}>
-                <span>Level <N>{f2(l)}</N></span>
-                <span className="qdm-sweep__k">keeps <N>{solid ? `${Math.round((kept / solid) * 100)}%` : int(kept)}</N></span>
-                <span className="qdm-sweep__k"><N>{parts}</N> {parts === 1 ? 'part' : 'parts'}</span>
+                <span><N>{f2(l)}</N></span>
+                <span className="qdm-sweep__k"><N>{solid ? `${Math.round((kept / solid) * 100)}%` : int(kept)}</N></span>
+                <span className="qdm-sweep__k"><N>{parts}</N></span>
               </div>
             </div>
           )

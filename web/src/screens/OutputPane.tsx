@@ -15,7 +15,8 @@ import { histogram, solidPerLayer, type Axis } from '../qs/grid'
 import { SectionMap } from './SectionMap'
 import { fmt } from './fmt'
 import { SLICE_COLORS, SLICE_OF, useSection, type SliceColor, type SliceOf } from '../qs/sectionColor'
-import { Panel, Row } from '../ui/Panel'
+import { Note, Panel, Row } from '../ui/Panel'
+import { usePresent } from '../present'
 import { PresentStyle } from './presentStyle'
 import { ComposeSections, OutputSections } from './PresentPanel'
 import { RunBar } from './RunBar'
@@ -78,7 +79,7 @@ const GROUPS: { id: GroupId; icon: string; t: string }[] = [
   { id: 'quantum', icon: 'quantum', t: 'Quantum' },
   { id: 'mesh', icon: 'print', t: 'Mesh' },
   { id: 'compose', icon: 'layers', t: 'Compose' },
-  { id: 'output', icon: 'export', t: 'Output' },
+  { id: 'output', icon: 'export', t: 'Animate & output' },
 ]
 type GroupId = 'model' | 'voxels' | 'quantum' | 'mesh' | 'compose' | 'output'
 const KEY = 'qs-props'
@@ -189,7 +190,7 @@ export function GridOut() {
 
 export function SliceOut() {
   const st = useStore()
-  const { slice, gridData, procData, hud, view, scan } = st
+  const { slice, gridData, procData, view } = st
   // what the section cuts (voxels, result, mesh) is one setting for this map, the slice card and the plane
   const sec = useSection()
   const g = sec.grid
@@ -208,17 +209,26 @@ export function SliceOut() {
   const scanning = view === 'scan'
   const canScan = !!procData && !!gridData
   const live = st.job?.status === 'running'
+  // the plane and its sweep are one setting with Compose (the Cutting plane piece) and Animate and
+  // output (Motion · Cutting plane): the same switch, clock, speed, step and range
+  const p = usePresent()
+  // the eye shows the slicer on the slice's own axis
+  const myId = ({ z: 'v1', x: 'v2', y: 'v3' } as const)[slice.axis]
+  const shown = (p.compose.plane ?? 'off').split(',').includes(myId)
+  const r = p.stageReel
+  const sweeping = p.playing && r.plane !== 'off'
+  const show = (v: boolean) => (v ? p.place('plane', myId) : p.removePiece(`plane:${myId}`))
   const sweep = () => {
-    if (!scanning) st.setFocus('scan', 'Scan sweep')
-    st.setSlice({ axis: 'z', index: slice.index >= n - 1 || !scanning ? 0 : slice.index })
-    st.setScan({ playing: true })
+    if (sweeping) { p.setPlaying(false); return }
+    if (!shown) p.place('plane', myId)   // starts the sweep and the clock
+    else { if (r.plane === 'off') p.setStageReel({ plane: 'loop' }); p.setPlaying(true) }
   }
   return (
     <Blk id="out-slice" label="Slice" note={`${slice.axis} ${slice.index} / ${n - 1}`}
-      tools={<Shows on={hud.slice} what="the cutting plane" set={(v) => st.setHud({ slice: v })} />}>
+      tools={<Shows on={shown} what="the cutting plane" set={show} />}>
       <div ref={box} style={{ width: '100%' }}>
         {g ? <SectionMap size={w} grid={g} input={sec.input} axis={slice.axis} index={slice.index} level={sec.level} scheme={sec.scheme} owner={sec.owner} kind={sec.kind}
-          onIndex={(i) => { st.setSlice({ index: i }); if (!hud.slice) st.setHud({ slice: true }) }} />
+          onIndex={(i) => { st.setSlice({ index: i }); if (!shown) show(true) }} />
           : <Empty>Voxelise to slice the grid.</Empty>}
       </div>
       <div className="out-pair">
@@ -230,21 +240,22 @@ export function SliceOut() {
       <Row label="Colour">
         <Segmented<SliceColor> size="s" options={SLICE_COLORS.map((c) => ({ ...c, disabled: c.value === 'nations' && !nationsOn }))} value={st.sliceColor} onChange={st.setSliceColor} aria-label="Section colour" />
       </Row>
-      <Slider label="Cutting plane" value={slice.index} min={0} max={n - 1} step={1} ticks={8} disabled={scanning && live}
-        onChange={(v) => { st.setScan({ playing: false }); st.setSlice({ index: v }); if (!hud.slice) st.setHud({ slice: true }) }}
+      <Slider label="Layer" value={slice.index} min={0} max={n - 1} step={1} ticks={8} disabled={scanning && live}
+        onChange={(v) => { if (sweeping) p.setPlaying(false); st.setSlice({ index: v }); if (!shown) show(true) }}
         format={(v) => `${v} · ${(v * (st.grid?.voxel_size ?? 0)).toFixed(1)} mm`} />
-      <div className="row" style={{ justifyContent: 'space-between' }}>
+      <Panel id="out-slice-sweep" title="Sweep" sub aside={sweeping ? `${r.planeSec} s a pass` : 'paused'}>
         <div className="row" style={{ gap: 4 }}>
-          <IconButton name={scan.playing ? 'pause' : slice.index >= n - 1 && scanning ? 'replay' : 'play'} disabled={!canScan || live}
-            title={scan.playing ? 'Pause the sweep' : 'Sweep the plane bottom to top: result below, original above'}
-            on={scan.playing} onClick={() => (scan.playing ? st.setScan({ playing: false }) : sweep())} />
+          <IconButton name={sweeping ? 'pause' : 'play'} disabled={!g}
+            title={sweeping ? 'Pause the sweep' : 'Sweep the plane, looping'} desc="The same sweep as Animate and output · Motion · Cutting plane." on={sweeping} onClick={sweep} />
           <IconButton name="scan" title={scanning ? 'Leave the scan view' : 'Scan view: result below the plane, original above'} on={scanning} disabled={!canScan}
             onClick={() => (scanning ? st.setFocus(st.proc?.mode === 'nations' ? 'evolve' : 'quantum', 'Left the scan') : st.setFocus('scan', 'Scan view'))} />
         </div>
-        <span className="qs-mono" style={{ color: 'var(--qs-ink3)' }}>
-          {live && st.job?.frontier != null ? 'following the Atlas run' : scanning ? 'scan · linked to the plane' : hud.slice ? 'plane shown in the view' : ''}
-        </span>
-      </div>
+        <Segmented<typeof r.planeMode> size="s" value={r.planeMode} onChange={(v) => p.setStageReel({ planeMode: v })} aria-label="Sweep direction"
+          options={[{ value: 'bounce', label: 'Up and down' }, { value: 'up', label: 'Up' }, { value: 'down', label: 'Down' }]} />
+        <Slider label="One pass" value={r.planeSec} min={2} max={30} step={1} ticks={7} format={(v) => `${v} s`} onChange={(v) => p.setStageReel({ planeSec: v })} />
+        <Slider label="Step" value={r.planeStep} min={1} max={8} step={1} ticks={8} format={(v) => (v === 1 ? 'every layer' : `${v} layers`)} onChange={(v) => p.setStageReel({ planeStep: v })} />
+        {live && st.job?.frontier != null && <Note>Following the Atlas run.</Note>}
+      </Panel>
     </Blk>
   )
 }

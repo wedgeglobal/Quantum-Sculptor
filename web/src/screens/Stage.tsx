@@ -1,7 +1,7 @@
 // DISPLAY: the volumetric workspace, composed like a 3D editor viewport but for sculpting with
 // quantum processes. Header: what is shown (left), then visibility, gizmos, overlays and shading
 // popovers (right). In the view: tool shelf (top-left), info, axis gizmo and navigation (top-right).
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { useStore, MORPH_MS, type Layer, type Shading, type Tool, type View, type Stage as StageName } from '../store'
 import { Engine, type LayerName, type ViewName } from '../view/engine'
@@ -14,10 +14,12 @@ import { Segmented } from '../qs/Segmented'
 import { Slider } from '../qs/Slider'
 import { Spinner } from './parts'
 import { HudLayer } from '../hud/Composer'
-import { FAMILIES } from '../hud/registry'
+import { BACKDROPS, LIGHTS, SHADINGS } from './look'
+import { FAMILIES, SLICER_AXIS } from '../hud/registry'
+import type { Axis } from '../qs/grid'
 import { chosenOf, toggleVariant, variantsOf } from '../hud/compose'
 import { MARK_MIME } from './MarkLibrary'
-import { usePresent, type SplitLayer } from '../present'
+import { gradeFilter, usePresent, type SplitLayer } from '../present'
 import { usePresentKeys } from './presentKeys'
 import { useAnimator } from './animator'
 import { DEFAULT_COMPOSITION } from '../hud/defaultComposition'
@@ -25,13 +27,11 @@ import type { HudCtx, Vec3 } from '../hud/types'
 import { live, bump } from '../live'
 import { ownerGreys, ownerPalette, nationName } from '../view/nations'
 import { densityPaint, nationPaint, peakOf } from './meshPaint'
-import { fit, frameOf } from '../frames'
+import { fit, frameOf, sizeOf } from '../frames'
 import { sectionRGBA, sectionSmooth, useSection } from '../qs/sectionColor'
 
 const MODE_LABEL: Record<string, string> = { gaussian: 'Gaussian', emulator: 'Emulation', atlas: 'Atlas', nations: 'Evolve' }
 const modeLabel = (m: string) => MODE_LABEL[m] ?? m
-
-const SWEEP_SECONDS = 10
 
 const TOOLS: { id: Tool; icon: string; t: string; d: string; key: string }[] = [
   { id: 'navigate', icon: 'navigate', t: 'Navigate', d: 'Drag to orbit, right-drag to pan, scroll to zoom. Nothing is read or pinned.', key: 'V' },
@@ -46,26 +46,8 @@ const LAYERS: { id: Layer; icon: string; t: string }[] = [
   { id: 'processed', icon: 'quantum', t: 'Quantum result' },
   { id: 'result', icon: 'print', t: 'Surface' },
 ]
-const LIGHTS = [
-  { id: 'studio', t: 'Key', d: 'A key light from the upper left of the camera, with sky fill.' },
-  { id: 'soft', t: 'Soft', d: 'Mostly sky light; gentle shading, good for dense voxels.' },
-  { id: 'flat', t: 'Flat', d: 'No shading at all: tone shows only the value.' },
-  { id: 'rim', t: 'Rim', d: 'A backlight outlines the silhouette.' },
-] as const
-const BACKDROPS = [
-  { id: 'plain', t: 'Plain', d: 'The page background.' },
-  { id: 'dots', t: 'Dots', d: 'A 24 px dot grid behind the model.' },
-  { id: 'lines', t: 'Grid', d: 'A fine square grid, like graph paper.' },
-  { id: 'gradient', t: 'Vignette', d: 'Lighter at the centre, darker at the edges.' },
-  { id: 'studio', t: 'Studio', d: 'A soft horizon, like a photo cyclorama.' },
-] as const
-
-const SHADINGS: { id: Shading; icon: string; t: string; d: string }[] = [
-  { id: 'wire', icon: 'wire', t: 'Wireframe', d: 'Edges only: voxels as a lattice, meshes as triangles.' },
-  { id: 'solid', icon: 'solid', t: 'Solid', d: 'The form alone, in one grey: no values, no nations.' },
-  { id: 'value', icon: 'value', t: 'Value', d: 'Coloured by the data: cells darker where denser, meshes by the density under their surface, Evolve by nation.' },
-  { id: 'entangle', icon: 'entangle', t: 'Entangle', d: "Entanglement: thin-film interference from tables computed by Moth's entanglement-shader-v1; the value (or, in Evolve, the nation) sets the film's thickness." },
-]
+/** The short side of a frame in the HUD's own pixels: pieces are sized and placed in it. */
+const HUD_REF = 800
 
 export function Stage() {
   const host = useRef<HTMLDivElement>(null)
@@ -80,7 +62,6 @@ export function Stage() {
     return () => ro.disconnect()
   }, [])
   const [engine, setEngine] = useState<Engine | null>(null)
-  const [tick, setTick] = useState(0)
   const [over, setOver] = useState(false)
   const [markOver, setMarkOver] = useState(false)
   const [tables, setTables] = useState<ShaderTables[]>([])
@@ -95,11 +76,10 @@ export function Stage() {
   const side = pr.bare ? 0 : st.hud.axes || st.hud.camera || st.hud.nav ? 88 : st.hud.tools ? 56 : 0
   // with pieces composed around the object, the view's own caption and value scale give way to them
   const composed = chosenOf(pr.compose).some((m) => m.slot !== 'object' && m.slot !== 'full') || pr.texts.length > 0
-  const { model, modelMesh, grid, gridData, procData, resultMesh, view, slice, m, hud, scan, theme, tool, shading, shade, layers } = st
+  const { model, modelMesh, grid, gridData, procData, resultMesh, view, slice, m, hud, theme, tool, shading, shade, layers } = st
 
   useEffect(() => {
     const e = new Engine(host.current!)
-    e.onChange = () => setTick((t) => t + 1)
     setEngine(e)
     return () => e.dispose()
   }, [])
@@ -149,7 +129,12 @@ export function Stage() {
   // the bounding box and print grid (a guide previewed from the library shows too)
   const guides = { ...pr.guides, box: pr.guides.box || pr.preview === 'guide:box', floor: pr.guides.floor || pr.preview === 'guide:floor' }
   useEffect(() => { engine?.setFrame({ bounds: guides.box, floor: guides.floor, divisions: guides.div }) }, [engine, guides.box, guides.floor, guides.div, grid])
-  const planeOn = hud.slice || tool === 'slice' || pr.planeLive || pr.split.on || (shown.slicecard ?? 'off') !== 'off'
+  // the plane shows when it is on the view (Library · Scene), or something works with it
+  // the slicers on the view, by axis; the main plane is the one on the slice's own axis
+  const slicerAxes = variantsOf(shown, 'plane').map((v) => SLICER_AXIS[v as keyof typeof SLICER_AXIS]).filter(Boolean) as Axis[]
+  const otherUsers = ['slicecard', 'scan'].some((f) => variantsOf(shown, f).length > 0)
+  const planeOn = !!model && (slicerAxes.includes(slice.axis) || otherUsers || tool === 'slice' || pr.split.on)
+  const extraAxes = model ? slicerAxes.filter((a) => a !== slice.axis) : []
   useEffect(() => { engine?.setSlice(planeOn ? slice : null) }, [engine, slice, view, planeOn])
   // split view: the cutting plane divides the object, one layer under it and one over it; a wipe in the
   // loop splits the same way while one step grows up out of the last
@@ -159,18 +144,28 @@ export function Stage() {
   useEffect(() => {
     engine?.setSplit(below && above ? { below, above, axis: slice.axis, index: slice.index } : null)
   }, [engine, below, above, slice.axis, slice.index, grid])
-  // while the loop plays, each step fades in rather than cutting
-  const step = useStore((s) => s.focus.stage)
-  useEffect(() => {
-    const el = host.current, p = usePresent.getState()
-    if (!el || !p.playing || p.stageReel.blend !== 'fade') return
-    el.classList.remove('stage__view--in')
-    void el.offsetWidth
-    el.classList.add('stage__view--in')
-  }, [step])
+  // kept centred: whenever there is something new to show, the orbit goes back round its middle
+  useEffect(() => { if (engine && pr.centred) engine.centre() }, [engine, pr.centred, modelMesh, gridData])
+  // one morph time for every change of step, on the loop and on a click alike (Cut: none)
+  useEffect(() => { engine?.setMorphMs(pr.stageReel.blend === 'off' ? 0 : pr.stageReel.morph * 1000) }, [engine, pr.stageReel.blend, pr.stageReel.morph])
+  // steps change by the geometry morphing from one layer into the next (Engine.show)
   // the cutting plane carries the section itself: what it cuts (voxels, result, mesh) and its colours
   // as the Slice panel says (nations in Evolve, the diffusion of the field, the mesh's own cut)
   const sec = useSection()
+  // the other slicers: the same layer of the grid along their own axes (they move with the main one)
+  const extraKey = extraAxes.join()
+  useEffect(() => {
+    if (!engine) return
+    const g = sec.grid
+    const axes = (extraKey ? extraKey.split(',') : []) as Axis[]
+    if (!axes.length || !g || g.n !== engine.n) { engine.setSlicers([]); return }
+    const n = g.n, index = Math.min(n - 1, slice.index)
+    engine.setSlicers(axes.map((axis) => {
+      if (sec.kind === 'cells') return { axis, index, rgba: sectionRGBA(g, axis, index, sec.scheme, theme, sec.owner), n }
+      const img = sectionSmooth(g, axis, index, sec.kind, sec.level, theme, sec.owner)
+      return { axis, index, rgba: img.rgba, n: img.size, smooth: true }
+    }))
+  }, [engine, extraKey, slice.index, sec.grid, sec.kind, sec.scheme, sec.owner, sec.level, theme])
   useEffect(() => {
     if (!engine) return
     const g = sec.grid
@@ -208,8 +203,18 @@ export function Stage() {
   }, [engine, shading, entMats, theme])
 
   useEffect(() => { engine?.setLighting(shade.light) }, [engine, shade.light])
+  useEffect(() => { engine?.setFacets(!!shade.facets) }, [engine, shade.facets])
   // motion: turntable, and a reel that flies through the saved shots
-  useEffect(() => { engine?.setSpin(pr.spin, pr.spinSpeed * pr.spinDir) }, [engine, pr.spin, pr.spinSpeed, pr.spinDir])
+  // the turntable follows the clock like everything else: it stops when the animation is paused part way
+  const frozen = !pr.playing && pr.t0 > 0
+  useEffect(() => { engine?.setSpin(pr.spin && !frozen, pr.spinSpeed * pr.spinDir) }, [engine, pr.spin, frozen, pr.spinSpeed, pr.spinDir])
+  // while it animates the view runs at the frame rate picked under Play (30 by default); still, at 60
+  const animating = pr.playing || pr.spin || pr.rhythm.on
+  useEffect(() => { engine?.setMaxFps(animating ? pr.fps : 60) }, [engine, animating, pr.fps])
+  const rh = pr.rhythm
+  useEffect(() => {
+    engine?.setRhythm(rh.on && !frozen ? { angle: rh.angle * pr.spinDir, beat: rh.beat / Math.max(0.1, pr.speed), zoom: rh.zoom, tilt: rh.tilt, roll: rh.roll, random: rh.random, ease: rh.ease } : null)
+  }, [engine, rh.on, rh.angle, rh.beat, rh.zoom, rh.tilt, rh.roll, rh.random, rh.ease, frozen, pr.spinDir, pr.speed])
   useEffect(() => {
     if (!engine || !pr.fly) return
     const p = usePresent.getState()   // pr.fly asks for the flight; the shot is read, not watched
@@ -246,18 +251,6 @@ export function Stage() {
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   }, [engine])
-
-  // sweep: step the slice from where it is to the top over ~10 s
-  useEffect(() => {
-    if (!scan.playing || !grid) return
-    const t = setInterval(() => {
-      const s = useStore.getState()
-      const next = s.slice.index + 1
-      if (next > grid.n - 1) { s.setScan({ playing: false }); return }
-      s.setSlice({ index: next })
-    }, (SWEEP_SECONDS * 1000) / grid.n)
-    return () => clearInterval(t)
-  }, [scan.playing, grid])
 
   const pick = (px: number, py: number): ProbeHit | null => {
     const g = useStore.getState()
@@ -349,7 +342,7 @@ export function Stage() {
   // slice tool: vertical drag moves the cutting plane one layer per 6 px
   const sliceDrag = useRef<{ y: number; i: number } | null>(null)
   const sliceHandlers = tool === 'slice' && grid ? {
-    onPointerDown: (e: React.PointerEvent) => { if (e.button === 0) { e.preventDefault(); sliceDrag.current = { y: e.clientY, i: useStore.getState().slice.index }; st.setScan({ playing: false }) } },
+    onPointerDown: (e: React.PointerEvent) => { if (e.button === 0) { e.preventDefault(); sliceDrag.current = { y: e.clientY, i: useStore.getState().slice.index }; usePresent.getState().setPlaying(false) } },
     onPointerMove: (e: React.PointerEvent) => {
       const d = sliceDrag.current
       if (!d) return
@@ -368,12 +361,14 @@ export function Stage() {
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
-  // when the view changes size (panels, resizers, the window), lay the pieces out again for it, unless
-  // some were placed by hand (those stay where they were put)
+  // when the unframed view changes size (panels, resizers, the window), lay the pieces out again for it,
+  // unless some were placed by hand (those stay where they were put)
   useEffect(() => {
     if (vsize.w < 50) return
     const t = setTimeout(() => {
       const p = usePresent.getState()
+      // a frame keeps its layout at any size (the HUD scales with the board): nothing to redo
+      if (frameOf(p.frame).ratio != null) return
       const mine = Object.entries(p.pos).filter(([k]) => k.startsWith('present|') && !k.startsWith('present|chrome:'))
       // anchored pieces (the default layout) go back to their places and settle again instead
       if (mine.some(([, v]) => v.anchor)) {
@@ -392,9 +387,12 @@ export function Stage() {
     const cx = vsize.w / 2, cy = vsize.h / 2
     // the largest box centred in the view that stays in that room
     const hw = Math.max(vsize.w * 0.12, Math.min(cx - r.l, r.r - cx)), hh = Math.max(vsize.h * 0.12, Math.min(cy - r.t, r.b - cy))
-    engine.frameInto({ l: cx - hw, r: cx + hw, t: cy - hh, b: cy + hh })
+    // kept centred: orbit round the object's own middle and only set the distance (no sideways pan)
+    const centred = usePresent.getState().centred
+    if (centred) engine.centre()
+    engine.frameInto({ l: cx - hw, r: cx + hw, t: cy - hh, b: cy + hh }, { pan: !centred })
   }
-  const hudCtx = (e: Engine): HudCtx => {
+  const hudCtx = (e: Engine, tick: number): HudCtx => {
     const a = e.angles(), lens = e.lens()
     const done = [!!model, !!gridData, !!procData, !!st.report]
     const modeName = modeLabel(st.proc?.mode ?? st.q.mode)
@@ -461,6 +459,15 @@ export function Stage() {
   // the artboard has a margin all round (none while capturing)
   const pad = pr.bare ? 0 : 24
   const board = framed && room.w > 0 ? fit(frame.ratio!, room.w - 2 * pad, room.h - 2 * pad - (pr.bare ? 0 : 40)) : null
+  // on a frame the HUD is laid out on the frame itself (HUD_REF px on its short side) and scaled with
+  // the board, so pieces keep their place and size against the object however large the board is drawn:
+  // the same with the panels open, hidden for a take, or in any window. Times the size picked under
+  // Animate and output · Frame
+  const hudScale = (board ? Math.min(board.w, board.h) / HUD_REF : 1) * pr.hudSize
+  // the frame's padding in view pixels (a share of its short side), and in the HUD layer's own
+  const vw = board?.w ?? vsize.w, vh = board?.h ?? vsize.h, short = Math.min(vw, vh) / 100
+  const padPx = { t: pr.pad.t * short, r: pr.pad.r * short, b: pr.pad.b * short, l: pr.pad.l * short }
+  const padHud = { t: padPx.t / hudScale, r: padPx.r / hudScale, b: padPx.b / hudScale, l: padPx.l / hudScale }
 
   return (
     <main className={'stage' + (framed ? ' stage--framed' : '')} ref={mainRef}>
@@ -549,73 +556,82 @@ export function Stage() {
           const f = e.dataTransfer.files[0]
           if (f) st.upload(f)
         }}
-        style={{ background: model ? undefined : 'radial-gradient(circle,var(--qs-dot) 1px,transparent 1.5px) 12px 12px/24px 24px', ...(board ? { width: board.w, height: board.h, flex: 'none' } : null) }}
+        style={{ background: model ? undefined : 'radial-gradient(circle,var(--qs-dot) 1px,transparent 1.5px) 12px 12px/24px 24px', ...(board ? { width: board.w, height: board.h, flex: 'none' } : null),
+          // the output grade, previewed on the view (and so in a recording, which captures the view)
+          filter: pr.grade.preview && gradeFilter(pr.grade) !== 'none' ? gradeFilter(pr.grade) : undefined }}
       >
         {hud.frame && !board && !variantsOf(shown, 'frame').length && <ViewMarks />}
+        {board && !pr.bare && pr.padGuide && <div className="stage__pad" data-no-export aria-hidden style={{ top: padPx.t, right: padPx.r, bottom: padPx.b, left: padPx.l }} />}
         {model && over && <div className="stage__drop">Release to open</div>}
-        {model && engine && (
-          <QProbeAnchored probe={probe} project={project} n={grid?.n ?? 32} mm={grid?.voxel_size ?? 1} measure={tool === 'measure'}
-            hideHover={(shown.selection ?? 'off') !== 'off'} hidePins={(shown.callout ?? 'off') !== 'off'} showPins />
-        )}
-
         {engine && (
-          <HudLayer ctx={hudCtx(engine)} compose={shown}
-            edit={pr.composing && !pr.bare && !pr.recording ? { sel: pr.sel, onSelect: pr.setSel, onRemove: pr.removePiece, onResize: (k, size) => pr.setLook(k, { size }) } : undefined}
-            looks={pr.looks} hl={pr.hl} ghost={pr.preview}
-            texts={pr.texts} onText={pr.setText}
-            fit={Math.max(0.4, Math.min(1, vsize.w / 2400, vsize.h / 1650))}
-            terse={!pr.notes}
-            autoArrange onCrowded={pr.setCrowded} onLeftOut={pr.setLeftOut} tidyKey={pr.tidyKey} onHero={onHero}
-            inset={{ l: side, r: side, t: 0, b: 0 }}
-            positions={Object.fromEntries(Object.entries(pr.pos).filter(([k]) => k.startsWith('present|')).map(([k, v]) => [k.slice(8), v]))}
-            onMove={(k, p) => pr.setPos(`present|${k}`, p)}
-            chrome={pr.bare ? {} : {
-            left: hud.tools ? (
-              <div className="toolshelf hud-chrome" role="toolbar" aria-label="Tools" onPointerDown={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()}>
-                {TOOLS.map((t, i) => (
-                  <span key={t.id} style={{ display: 'contents' }}>
-                    {i === 1 && <span className="toolshelf__sep" />}
-                    {i === 4 && <span className="toolshelf__sep" />}
-                    <IconButton name={t.icon} title={t.t} desc={t.d} hotkey={t.key} side="right" on={tool === t.id} onClick={() => st.setTool(t.id)} />
-                  </span>
-                ))}
-                <span className="toolshelf__sep" />
-                <IconButton name="eyeOff" title="Hide the tool shelf" desc="Bring it back under Properties · Compose · On the view." side="right" onClick={() => st.setHud({ tools: false })} />
-                {probe.pins.length > 0 && (
-                  <>
-                    <span className="toolshelf__sep" />
-                    <IconButton name="clear" title={`Clear ${probe.pins.length} pin${probe.pins.length === 1 ? '' : 's'}`} side="right" badge={probe.pins.length} onClick={() => probe.clear()} />
-                  </>
-                )}
-              </div>
-            ) : undefined,
-            tl: hud.caption && info && !composed ? (
-              <div className="hud__info">
-                <span>{info[0]}</span>
-                <span>{info[1]}</span>
-                {tool === 'slice' && grid && <span>slice · drag up or down · z {slice.index}</span>}
-              </div>
-            ) : undefined,
-            // the axis gizmo, the camera readout and navigation share one strip down the right edge
-            right: hud.axes || hud.camera || hud.nav ? (
-              <div className="nav-strip hud-chrome" onPointerDown={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-                {hud.axes && <Gizmo engine={engine} />}
-                {hud.camera && <CameraReadout engine={engine} />}
-                {hud.nav && (
-                  <div className="nav__col">
-                    <DragButton name="zoom" title="Zoom" desc="Drag up or down here, or scroll in the view." onDrag={(_, dy) => engine.nudge({ zoom: dy })} />
-                    <DragButton name="pan" title="Pan" desc="Drag here, or right-drag in the view." onDrag={(dx, dy) => engine.nudge({ pan: [dx, dy] })} />
-                    <DragButton name="orbit" title="Orbit" desc="Drag here, or drag in the view." onDrag={(dx, dy) => engine.nudge({ orbit: [dx, dy] })} />
-                    <IconButton name="frame" title="Reset view" desc="Back to the starting angle, centred on the grid." hotkey="Home" side="left" onClick={() => engine.home()} />
-                  </div>
-                )}
-              </div>
-            ) : undefined,
-            br: hud.legend && !composed && shaded && !(nations && (view === 'processed' || view === 'scan')) ? <Legend level={m.level} mode={shading} /> : undefined,
-          }} />
+          // only this part redraws as the camera moves: the HUD and the probe follow it, the rest stays
+          <LiveLayer engine={engine}>{(tick) => (
+          <>
+          {model && (
+            <QProbeAnchored probe={probe} project={project} n={grid?.n ?? 32} mm={grid?.voxel_size ?? 1} measure={tool === 'measure'}
+              hideHover={!hud.probe || (shown.selection ?? 'off') !== 'off'} hidePins={(shown.callout ?? 'off') !== 'off'} showPins />
+          )}
+
+            <HudLayer ctx={hudCtx(engine, tick)} compose={shown}
+              edit={pr.composing && !pr.bare && !pr.recording ? { sel: pr.sel, onSelect: pr.setSel, onRemove: pr.removePiece, onResize: (k, size) => pr.setLook(k, { size }) } : undefined}
+              looks={pr.looks} hl={pr.hl} ghost={pr.preview}
+              texts={pr.texts} onText={pr.setText}
+              fit={board ? 1 : Math.max(0.4, Math.min(1, vsize.w / 2400, vsize.h / 1650))}
+              scale={hudScale} pad={padHud}
+              terse={!pr.notes}
+              autoArrange onCrowded={pr.setCrowded} onLeftOut={pr.setLeftOut} tidyKey={pr.tidyKey} onHero={onHero}
+              inset={{ l: (side + padPx.l) / hudScale, r: (side + padPx.r) / hudScale, t: padHud.t, b: padHud.b }}
+              positions={Object.fromEntries(Object.entries(pr.pos).filter(([k]) => k.startsWith('present|')).map(([k, v]) => [k.slice(8), v]))}
+              onMove={(k, p) => pr.setPos(`present|${k}`, p)}
+              chrome={pr.bare ? {} : {
+              left: hud.tools ? (
+                <div className="toolshelf hud-chrome" role="toolbar" aria-label="Tools" onPointerDown={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()}>
+                  {TOOLS.map((t, i) => (
+                    <span key={t.id} style={{ display: 'contents' }}>
+                      {i === 1 && <span className="toolshelf__sep" />}
+                      {i === 4 && <span className="toolshelf__sep" />}
+                      <IconButton name={t.icon} title={t.t} desc={t.d} hotkey={t.key} side="right" on={tool === t.id} onClick={() => st.setTool(t.id)} />
+                    </span>
+                  ))}
+                  <span className="toolshelf__sep" />
+                  <IconButton name="eyeOff" title="Hide the tool shelf" desc="Bring it back under Properties · Compose · On the view." side="right" onClick={() => st.setHud({ tools: false })} />
+                  {probe.pins.length > 0 && (
+                    <>
+                      <span className="toolshelf__sep" />
+                      <IconButton name="clear" title={`Clear ${probe.pins.length} pin${probe.pins.length === 1 ? '' : 's'}`} side="right" badge={probe.pins.length} onClick={() => probe.clear()} />
+                    </>
+                  )}
+                </div>
+              ) : undefined,
+              tl: hud.caption && info && !composed ? (
+                <div className="hud__info">
+                  <span>{info[0]}</span>
+                  <span>{info[1]}</span>
+                  {tool === 'slice' && grid && <span>slice · drag up or down · z {slice.index}</span>}
+                </div>
+              ) : undefined,
+              // the axis gizmo, the camera readout and navigation share one strip down the right edge
+              right: hud.axes || hud.camera || hud.nav ? (
+                <div className="nav-strip hud-chrome" onPointerDown={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+                  {hud.axes && <Gizmo engine={engine} />}
+                  {hud.camera && <CameraReadout engine={engine} />}
+                  {hud.nav && (
+                    <div className="nav__col">
+                      <DragButton name="zoom" title="Zoom" desc="Drag up or down here, or scroll in the view." onDrag={(_, dy) => engine.nudge({ zoom: dy })} />
+                      <DragButton name="pan" title="Pan" desc="Drag here, or right-drag in the view." onDrag={(dx, dy) => engine.nudge({ pan: [dx, dy] })} />
+                      <DragButton name="orbit" title="Orbit" desc="Drag here, or drag in the view." onDrag={(dx, dy) => engine.nudge({ orbit: [dx, dy] })} />
+                      <IconButton name="frame" title="Reset view" desc="Back to the starting angle, centred on the grid." hotkey="Home" side="left" onClick={() => (usePresent.getState().centred ? engine.homeCentred() : engine.home())} />
+                    </div>
+                  )}
+                </div>
+              ) : undefined,
+              br: hud.legend && !composed && shaded && !(nations && (view === 'processed' || view === 'scan')) ? <Legend level={m.level} mode={shading} /> : undefined,
+            }} />
+          </>
+          )}</LiveLayer>
         )}
       </div>
-      {board && !pr.bare && <div className="stage__board-label" data-no-export>{frame.t} · {frame.use}{frame.sizes[0] ? ` · ${frame.sizes[Math.min(pr.outSize, frame.sizes.length - 1)].join(' × ')} px` : ''}</div>}
+      {board && !pr.bare && <div className="stage__board-label" data-no-export>{frame.t} · {frame.use} · {sizeOf(frame, pr.outSize)?.join(' × ')} px</div>}
     </main>
   )
 }
@@ -636,6 +652,10 @@ function ShadingOptions({ tables }: { tables: ShaderTables[] }) {
             </button>
           ))}
         </div>
+      </PopSection>
+      <PopSection label="Surface">
+        <Segmented<string> size="s" value={shade.facets ? 'facets' : 'smooth'} onChange={(v) => st.setShading(shading, { facets: v === 'facets' })} aria-label="Surface"
+          options={[{ value: 'smooth', label: 'Smooth' }, { value: 'facets', label: 'Faceted' }]} />
       </PopSection>
       <PopSection label="Lighting">
         <div className="swatches">
@@ -715,6 +735,23 @@ function QProbeAnchored({ probe, project, n, mm, measure, hideHover, hidePins, s
       <QProbe w={size.w} h={size.h} n={n} probe={probe} project={project} mmPerCell={mm} hideClear measure={measure} hideHover={hideHover} hidePins={hidePins} showPins={showPins} />
     </>
   )
+}
+
+/** Redraws its children on every camera change (Engine.onChange) without redrawing the whole Stage:
+ *  the HUD and the probe overlay project points through the camera, nothing else needs to. */
+function LiveLayer({ engine, children }: { engine: Engine; children: (tick: number) => ReactNode }) {
+  const [tick, setTick] = useState(0)
+  // at the engine's frame rate at most: a camera turning on its own changes every frame
+  useEffect(() => {
+    let last = 0, pending = 0
+    const off = engine.listen(() => {
+      const now = performance.now(), gap = 1000 / engine.maxFps
+      if (now - last >= gap - 2) { last = now; setTick((t) => t + 1); return }
+      if (!pending) pending = window.setTimeout(() => { pending = 0; last = performance.now(); setTick((t) => t + 1) }, gap - (now - last))
+    })
+    return () => { off(); clearTimeout(pending) }
+  }, [engine])
+  return <>{children(tick)}</>
 }
 
 /** An icon button you drag: orbit, pan or zoom like Blender's navigation buttons. */

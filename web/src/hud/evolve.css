@@ -56,3 +56,9 @@
 .hev-border--ally { stroke: var(--qs-ink); }
 .hev-atk { fill: none; stroke: #D23F35; stroke-width: 1.5; stroke-dasharray: 1; stroke-dashoffset: 0; animation: hev-draw .4s ease-out; }
 @media (prefers-reduced-motion: reduce) { .hev-atk, .hev-log li { animation: none; } .hev-nat, .hev-nat circle, .hev-label, .hev-border, .hev-glide, .hev-bar > span { transition: none; } }
+/* before Evolve has run: a dashed row and one line saying how (kept on the view, unlike sentences) */
+.hev--wait { display: inline-flex; align-items: center; gap: 10px; }
+.hev-wait { font: 400 10px/1 var(--qs-mono); color: var(--qs-ink3); white-space: nowrap; }
+/* relations, ranked: arcs ease as ties change */
+.hev-arc { transition: d .45s ease-out, stroke-width .45s ease-out, opacity .45s ease-out; }
+.hev--ranked .hev-label { font-size: 9px; }

@@ -10,6 +10,7 @@ export interface Rect { l: number; r: number; t: number; b: number }
 
 export type Family =
   | 'frame'      // lab frame: registration dots, crosses, corner brackets
+  | 'plane'      // the cutting plane through the grid (drawn by the view itself)
   | 'meta'       // metadata blocks (HISTORY / SCENE style readouts)
   | 'orbit'      // orbit rings around the object (gimbal, cage, stations, live)
   | 'camera'     // camera, abstracted (viewpoint, frustum plan, viewport, az/el chart, three views, look-at)
@@ -51,6 +52,8 @@ export type Family =
   | 'viewcam'    // trackball, view camera from the top and from the side
   // Evolve (app/nations.py)
   | 'evolve'     // nations roster, territory over the history, chronicle, relations, record
+  // Infographics (hud/charts.tsx)
+  | 'charts'     // the Quantum properties, animated: circuit, register, qubit bars, density bars, figures
   // Settings (hud/paramDefs.ts)
   | 'param'      // any parameter as a readout
 
